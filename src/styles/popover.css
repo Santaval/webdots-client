@@ -1,0 +1,124 @@
+/**
+ * Shared popover chrome (Popover.ts) + create-annotation form fields
+ * (AnnotationForm.ts). AnnotationCard reuses `.wd-popover` in M4.
+ */
+.wd-popover {
+  all: initial;
+  box-sizing: border-box;
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: var(--wd-z-popover);
+  width: 280px;
+  background: var(--wd-color-bg);
+  border: 1px solid var(--wd-color-border);
+  border-radius: var(--wd-radius-md);
+  box-shadow: var(--wd-shadow-toolbar);
+  padding: var(--wd-space-3);
+  font-family: var(--wd-font-family);
+  font-size: var(--wd-font-size);
+  color: var(--wd-color-text);
+}
+
+.wd-popover * {
+  box-sizing: border-box;
+  font-family: inherit;
+}
+
+.wd-form__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--wd-space-1);
+  margin-bottom: var(--wd-space-2);
+}
+
+.wd-form__label {
+  font-weight: 600;
+  color: var(--wd-color-text-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.wd-form__input,
+.wd-form__textarea,
+.wd-form__select {
+  all: unset;
+  box-sizing: border-box;
+  width: 100%;
+  padding: var(--wd-space-2);
+  border: 1px solid var(--wd-color-border);
+  border-radius: var(--wd-radius-sm);
+  background: var(--wd-color-bg-elevated);
+  color: var(--wd-color-text);
+}
+
+.wd-form__input:focus-visible,
+.wd-form__textarea:focus-visible,
+.wd-form__select:focus-visible {
+  outline: 2px solid var(--wd-color-accent);
+  outline-offset: 1px;
+}
+
+.wd-form__textarea {
+  min-height: 60px;
+  resize: vertical;
+}
+
+.wd-form__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--wd-space-2);
+  margin-top: var(--wd-space-3);
+}
+
+.wd-form__button {
+  all: unset;
+  box-sizing: border-box;
+  padding: var(--wd-space-2) var(--wd-space-3);
+  border-radius: var(--wd-radius-sm);
+  cursor: pointer;
+  font-weight: 600;
+  text-align: center;
+}
+
+.wd-form__button--primary {
+  background: var(--wd-color-accent);
+  color: var(--wd-color-accent-contrast);
+}
+
+.wd-form__button--primary:hover {
+  opacity: 0.9;
+}
+
+.wd-form__button--secondary {
+  background: var(--wd-color-bg-elevated);
+  color: var(--wd-color-text);
+}
+
+.wd-form__button--secondary:hover {
+  background: var(--wd-color-border);
+}
+
+.wd-form__button:focus-visible {
+  outline: 2px solid var(--wd-color-accent);
+  outline-offset: 1px;
+}
+
+/**
+ * `.wd-form__button`'s `all: unset` resets `display` to its CSS-initial
+ * value, which — because an author rule of equal specificity always beats
+ * the UA stylesheet regardless of which selector is "more specific" in the
+ * abstract — clobbers the browser's default `[hidden] { display: none }`
+ * rule. Without this, a hidden button (e.g. AnnotationCard's delete-confirm
+ * Cancel button) renders anyway.
+ */
+.wd-form__button[hidden] {
+  display: none;
+}
+
+.wd-form__error {
+  color: var(--wd-color-danger);
+  font-size: 12px;
+  margin: -4px 0 var(--wd-space-2);
+}

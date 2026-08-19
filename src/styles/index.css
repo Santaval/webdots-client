@@ -1,0 +1,11 @@
+/**
+ * Single entry point Vite inlines as a string (`?inline` import in
+ * ShadowHost.ts). @import is resolved at build time by Vite/PostCSS, so the
+ * final bundle contains one concatenated string — no separate .css asset.
+ */
+@import './tokens.css';
+@import './toolbar.css';
+@import './pin.css';
+@import './popover.css';
+@import './card.css';
+@import './toast.css';

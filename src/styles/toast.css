@@ -1,0 +1,85 @@
+/**
+ * Toast.ts — transient error messages. Mirrors Overlay's "full-viewport
+ * layer, pointer-events:none, only the interactive children opt back in"
+ * pattern so an empty (or partially filled) toast region never blocks
+ * clicks on the widget's own UI or the host page underneath it.
+ */
+.wd-toast-region {
+  all: initial;
+  box-sizing: border-box;
+  position: fixed;
+  top: var(--wd-space-4);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: var(--wd-z-toast);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--wd-space-2);
+  pointer-events: none;
+  width: max-content;
+  max-width: min(360px, calc(100vw - 2 * var(--wd-space-4)));
+}
+
+.wd-toast {
+  box-sizing: border-box;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--wd-space-2);
+  width: 100%;
+  padding: var(--wd-space-3);
+  background: var(--wd-color-bg);
+  border: 1px solid var(--wd-color-danger);
+  border-radius: var(--wd-radius-md);
+  box-shadow: var(--wd-shadow-toolbar);
+  font-family: var(--wd-font-family);
+  font-size: var(--wd-font-size);
+  color: var(--wd-color-text);
+  pointer-events: auto;
+  /* Neutralized under `prefers-reduced-motion: reduce` by the blanket
+     override in tokens.css. */
+  animation: wd-toast-in 150ms ease-out;
+}
+
+@keyframes wd-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.wd-toast__message {
+  flex: 1;
+  margin: 0;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.wd-toast__close {
+  all: unset;
+  box-sizing: border-box;
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--wd-radius-sm);
+  cursor: pointer;
+  color: var(--wd-color-text-muted);
+  line-height: 1;
+}
+
+.wd-toast__close:hover {
+  background: var(--wd-color-bg-elevated);
+  color: var(--wd-color-text);
+}
+
+.wd-toast__close:focus-visible {
+  outline: 2px solid var(--wd-color-accent);
+  outline-offset: 1px;
+}

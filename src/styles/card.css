@@ -1,0 +1,129 @@
+/**
+ * AnnotationCard (view/edit detail popover). Reuses `.wd-popover` chrome
+ * from popover.css for positioning + border/shadow, and `.wd-form__button*`
+ * for its action buttons; this file only adds the content layout specific
+ * to the card itself plus the two button variants it introduces
+ * (danger/confirm) for Delete's two-step in-popover confirmation.
+ */
+.wd-popover--card {
+  width: 260px;
+}
+
+.wd-card__header {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--wd-space-2);
+  margin-bottom: var(--wd-space-2);
+}
+
+.wd-card__title {
+  flex: 1;
+  margin: 0;
+  font-size: var(--wd-font-size);
+  font-weight: 700;
+  color: var(--wd-color-text);
+  word-break: break-word;
+}
+
+.wd-card__status {
+  flex-shrink: 0;
+  padding: 2px 6px;
+  border-radius: var(--wd-radius-sm);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: var(--wd-color-bg-elevated);
+  color: var(--wd-color-text-muted);
+}
+
+.wd-card__status[data-status='RESOLVED'] {
+  background: var(--wd-color-accent);
+  color: var(--wd-color-accent-contrast);
+}
+
+.wd-card__close {
+  all: unset;
+  box-sizing: border-box;
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--wd-radius-sm);
+  cursor: pointer;
+  color: var(--wd-color-text-muted);
+  line-height: 1;
+}
+
+.wd-card__close:hover {
+  background: var(--wd-color-bg-elevated);
+  color: var(--wd-color-text);
+}
+
+.wd-card__close:focus-visible {
+  outline: 2px solid var(--wd-color-accent);
+  outline-offset: 1px;
+}
+
+/**
+ * `degraded`/`orphaned` resolve-confidence warning (M5, plan §4) — the
+ * card-level counterpart of the pin's own dashed border. Kept visually
+ * distinct from the description (a subtle background tint, no false
+ * urgency) but unmissable.
+ */
+.wd-card__notice {
+  margin: 0 0 var(--wd-space-2);
+  padding: var(--wd-space-2);
+  border-radius: var(--wd-radius-sm);
+  background: var(--wd-color-bg-elevated);
+  color: var(--wd-color-text-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.wd-card__notice[hidden] {
+  display: none;
+}
+
+.wd-card__description {
+  margin: 0 0 var(--wd-space-2);
+  color: var(--wd-color-text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.wd-card__description[hidden] {
+  display: none;
+}
+
+.wd-card__meta {
+  margin: 0;
+  color: var(--wd-color-text-muted);
+  font-size: 11px;
+}
+
+.wd-card__actions {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+}
+
+.wd-form__button--danger {
+  background: transparent;
+  color: var(--wd-color-danger);
+}
+
+.wd-form__button--danger:hover {
+  background: var(--wd-color-danger);
+  color: var(--wd-color-accent-contrast);
+}
+
+.wd-form__button--confirm {
+  background: var(--wd-color-danger);
+  color: var(--wd-color-accent-contrast);
+}
+
+.wd-form__button--confirm:hover {
+  opacity: 0.9;
+}

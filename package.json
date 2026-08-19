@@ -1,0 +1,46 @@
+{
+  "name": "@webdots/annotate-client",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Framework-agnostic, zero-dependency visual annotation widget for QA teams.",
+  "license": "MIT",
+  "author": "Webdots",
+  "keywords": [
+    "annotation",
+    "qa",
+    "bug-tracking",
+    "visual-feedback",
+    "widget",
+    "shadow-dom",
+    "framework-agnostic"
+  ],
+  "sideEffects": false,
+  "main": "./dist/webdots.cjs.js",
+  "module": "./dist/webdots.es.js",
+  "unpkg": "./dist/webdots.umd.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/webdots.es.js",
+      "require": "./dist/webdots.cjs.js"
+    }
+  },
+  "files": [
+    "dist",
+    "LICENSE"
+  ],
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build && tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "size": "node scripts/size-limit.mjs"
+  },
+  "devDependencies": {
+    "jsdom": "^25.0.1",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.11",
+    "vitest": "^2.1.8"
+  }
+}

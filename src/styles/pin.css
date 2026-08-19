@@ -1,0 +1,86 @@
+/**
+ * Overlay layer (pin container + hover highlight). Positioned in VIEWPORT
+ * coordinates so scroll/resize is just a recompute, not a re-layout — see
+ * Overlay.ts.
+ */
+.wd-overlay {
+  all: initial;
+  box-sizing: border-box;
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: var(--wd-z-overlay);
+  pointer-events: none;
+}
+
+.wd-pin {
+  all: initial;
+  box-sizing: border-box;
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 2px solid var(--wd-color-bg);
+  background: var(--wd-color-accent);
+  color: var(--wd-color-accent-contrast);
+  font-family: var(--wd-font-family);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  pointer-events: auto;
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+  transform-origin: 0 0;
+}
+
+.wd-pin:hover {
+  filter: brightness(1.08);
+}
+
+.wd-pin:focus-visible {
+  outline: 2px solid var(--wd-color-accent);
+  outline-offset: 2px;
+}
+
+.wd-pin--hidden {
+  display: none;
+}
+
+/**
+ * `degraded`/`orphaned` confidence (plan §4): the anchor could not be
+ * re-resolved to its exact original element, so the pin's position is a
+ * best-effort fallback rather than a certainty. A dashed ring is the
+ * visual counterpart of AnnotationCard's "position may have shifted" note
+ * — never present a possibly-wrong position as if it were solid/certain.
+ * `lost` pins never reach this state; they're hidden via `wd-pin--hidden`
+ * instead (see Pin.setPosition).
+ */
+.wd-pin--degraded {
+  border-style: dashed;
+  background: var(--wd-color-bg-elevated);
+  color: var(--wd-color-text);
+}
+
+.wd-highlight {
+  all: initial;
+  box-sizing: border-box;
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: var(--wd-z-overlay);
+  pointer-events: none;
+  border: 2px solid var(--wd-color-accent);
+  border-radius: 4px;
+  background: rgba(79, 70, 229, 0.08);
+}
+
+.wd-highlight--hidden {
+  display: none;
+}

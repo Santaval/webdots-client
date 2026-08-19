@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Webdots demo — hostile host page</title>
+    <style>
+      /* ---- Aggressive global reset, on purpose ---------------------- */
+      * {
+        box-sizing: content-box !important;
+        margin: 3px !important;
+        padding: 2px !important;
+        border: 1px dashed transparent !important;
+        font-family: 'Comic Sans MS', cursive !important;
+        line-height: 2.4 !important;
+        letter-spacing: 0.5px !important;
+      }
+
+      html,
+      body {
+        margin: 0 !important;
+        padding: 0 !important;
+      }
+
+      body {
+        background: repeating-linear-gradient(45deg, #fffbe6, #fffbe6 10px, #fff3b0 10px, #fff3b0 20px) !important;
+        color: #222 !important;
+      }
+
+      div {
+        background-color: rgba(255, 0, 0, 0.03) !important;
+        outline: 1px solid rgba(0, 0, 255, 0.05) !important;
+      }
+
+      button {
+        background: linear-gradient(#ff5f6d, #ffc371) !important;
+        color: white !important;
+        border-radius: 999px !important;
+        padding: 14px 22px !important;
+        font-size: 18px !important;
+        font-weight: 900 !important;
+        text-transform: uppercase !important;
+        box-shadow: 0 0 0 4px hotpink !important;
+        cursor: crosshair !important;
+      }
+
+      input {
+        border: 4px groove purple !important;
+        background: yellow !important;
+        font-size: 20px !important;
+      }
+
+      a {
+        color: magenta !important;
+        text-decoration: line-through wavy red !important;
+      }
+
+      h1,
+      h2,
+      h3 {
+        color: teal !important;
+        text-shadow: 2px 2px 0 orange !important;
+      }
+
+      /* ---- Sticky header -------------------------------------------- */
+      .sh_1a2b3 {
+        position: sticky;
+        top: 0;
+        z-index: 500;
+        background: #111 !important;
+        color: #fff !important;
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        padding: 10px 24px !important;
+      }
+
+      .sh_1a2b3 * {
+        color: #fff !important;
+        background: transparent !important;
+      }
+
+      /* ---- Hashed CSS-module-like classes ----------------------------- */
+      .cmp_Card__x7f2a {
+        border: 1px solid #ccc !important;
+        border-radius: 8px !important;
+        padding: 20px !important;
+        background: #fff !important;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08) !important;
+      }
+
+      .cmp_Grid__q9k1z {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+        gap: 20px;
+        padding: 24px !important;
+      }
+
+      .cmp_Btn__z4m8p {
+        background: #0a7 !important;
+      }
+
+      /* ---- Layout scaffolding ---------------------------------------- */
+      main {
+        padding: 24px !important;
+      }
+
+      section {
+        margin-bottom: 48px !important;
+      }
+
+      .filler {
+        height: 420px;
+      }
+
+      .duplicate-block {
+        border: 2px solid #888 !important;
+        padding: 16px !important;
+        margin-bottom: 16px !important;
+      }
+    </style>
+  </head>
+  <body>
+    <header class="sh_1a2b3">
+      <strong>HostileCorp Admin</strong>
+      <nav>
+        <a href="#one">Dashboard</a>
+        <a href="#two">Reports</a>
+        <a href="#three">Settings</a>
+      </nav>
+    </header>
+
+    <main>
+      <section id="one">
+        <h1>Webdots M1 demo</h1>
+        <p>
+          This page is deliberately hostile: broad <code>*</code> resets, <code>!important</code>
+          declarations on <code>div</code>/<code>button</code>/<code>input</code>, a sticky header,
+          and hashed CSS-module-ish class names. If the Webdots toolbar (bottom right) looks like a
+          normal, sane UI element instead of this page's garish theme, shadow DOM isolation is
+          working.
+        </p>
+        <button id="plain-button" data-testid="cta-primary">Click me (host button)</button>
+        <input type="text" placeholder="Host input" data-testid="search-input" />
+      </section>
+
+      <section id="two" class="cmp_Grid__q9k1z">
+        <div class="cmp_Card__x7f2a" data-testid="card-1">
+          <h2>Card One</h2>
+          <p>Some card content with a nested <button class="cmp_Btn__z4m8p">Action</button>.</p>
+        </div>
+        <div class="cmp_Card__x7f2a" data-testid="card-2">
+          <h2>Card Two</h2>
+          <p>Duplicate structure test — no test id below.</p>
+          <button class="cmp_Btn__z4m8p">Action</button>
+        </div>
+        <div class="cmp_Card__x7f2a">
+          <h2>Card Three</h2>
+          <p>Duplicate structure test — no test id below.</p>
+          <button class="cmp_Btn__z4m8p">Action</button>
+        </div>
+      </section>
+
+      <section id="three">
+        <h2>Duplicate siblings</h2>
+        <div class="duplicate-block">
+          <span>Row</span>
+          <button>Edit</button>
+        </div>
+        <div class="duplicate-block">
+          <span>Row</span>
+          <button>Edit</button>
+        </div>
+        <div class="duplicate-block">
+          <span>Row</span>
+          <button>Edit</button>
+        </div>
+      </section>
+
+      <section>
+        <h2>Scroll filler 1</h2>
+        <div class="filler">Scroll past me — 3+ screens of content to test fixed-position pins.</div>
+      </section>
+      <section>
+        <h2>Scroll filler 2</h2>
+        <div class="filler">Still scrolling…</div>
+      </section>
+      <section>
+        <h2>Scroll filler 3</h2>
+        <div class="filler">Almost there…</div>
+      </section>
+      <section>
+        <h3>End of page</h3>
+        <p>If you made it here without the host CSS touching the toolbar, isolation works.</p>
+      </section>
+    </main>
+
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

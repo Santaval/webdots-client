@@ -1,0 +1,130 @@
+/**
+ * Design tokens as CSS custom properties. These live inside the shadow
+ * root, scoped to :host, so the host page's `prefers-color-scheme` /
+ * cascade can never leak in and the widget can never leak out.
+ */
+/**
+ * Defence in depth. ShadowHost.ts already pins the host element with
+ * important-priority inline styles, but inheritable properties (font, color,
+ * line-height, letter-spacing, direction...) cross the shadow boundary from
+ * the host element, so we re-establish known values at the root of the shadow
+ * tree. If the host reset is ever defeated, the widget's own UI still renders
+ * correctly instead of silently adopting the page's typography.
+ */
+:host {
+  font-family: var(--wd-font-family);
+  font-size: var(--wd-font-size);
+  font-weight: 400;
+  font-style: normal;
+  line-height: 1.4;
+  letter-spacing: normal;
+  text-transform: none;
+  text-align: left;
+  white-space: normal;
+  word-spacing: normal;
+  color: var(--wd-color-text);
+  direction: ltr;
+  text-shadow: none;
+  visibility: visible;
+}
+
+:host {
+  --wd-color-bg: #ffffff;
+  --wd-color-bg-elevated: #f7f7f8;
+  --wd-color-border: #d7d8dc;
+  --wd-color-text: #17181a;
+  --wd-color-text-muted: #6b6f76;
+  --wd-color-accent: #4f46e5;
+  --wd-color-accent-contrast: #ffffff;
+  --wd-color-danger: #dc2626;
+
+  --wd-radius-sm: 6px;
+  --wd-radius-md: 10px;
+
+  --wd-space-1: 4px;
+  --wd-space-2: 8px;
+  --wd-space-3: 12px;
+  --wd-space-4: 16px;
+
+  --wd-shadow-toolbar: 0 4px 16px rgba(0, 0, 0, 0.18), 0 1px 2px rgba(0, 0, 0, 0.08);
+
+  --wd-font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial,
+    sans-serif;
+  --wd-font-size: 13px;
+
+  /* z-layers, relative to the host's own z-index (set inline per config.zIndex) */
+  --wd-z-toolbar: 10;
+  --wd-z-overlay: 20;
+  --wd-z-popover: 30;
+  --wd-z-toast: 40;
+
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :host {
+    --wd-color-bg: #1e1f22;
+    --wd-color-bg-elevated: #2a2b2f;
+    /*
+     * #75787f, not the much darker #3a3b40 this used to be: at #3a3b40 the
+     * border sits at ~1.3:1 against both --wd-color-bg and
+     * --wd-color-bg-elevated — invisible by WCAG 1.4.11's 3:1 non-text
+     * contrast minimum, so inputs/popovers/panels had no visible edge in
+     * dark mode. #75787f clears 3:1 against both backgrounds while staying
+     * visibly darker than --wd-color-text-muted, preserving the
+     * border < muted-text < text hierarchy.
+     */
+    --wd-color-border: #75787f;
+    --wd-color-text: #f2f2f3;
+    --wd-color-text-muted: #a0a3a8;
+    --wd-color-accent: #818cf8;
+    --wd-color-accent-contrast: #17181a;
+    --wd-color-danger: #f87171;
+
+    color-scheme: dark;
+  }
+}
+
+/* Explicit theme overrides — `config.theme` sets `data-theme` on the host,
+   which takes priority over the media query in either direction. */
+:host([data-theme='light']) {
+  --wd-color-bg: #ffffff;
+  --wd-color-bg-elevated: #f7f7f8;
+  --wd-color-border: #d7d8dc;
+  --wd-color-text: #17181a;
+  --wd-color-text-muted: #6b6f76;
+  --wd-color-accent: #4f46e5;
+  --wd-color-accent-contrast: #ffffff;
+  --wd-color-danger: #dc2626;
+  color-scheme: light;
+}
+
+:host([data-theme='dark']) {
+  --wd-color-bg: #1e1f22;
+  --wd-color-bg-elevated: #2a2b2f;
+  --wd-color-border: #75787f;
+  --wd-color-text: #f2f2f3;
+  --wd-color-text-muted: #a0a3a8;
+  --wd-color-accent: #818cf8;
+  --wd-color-accent-contrast: #17181a;
+  --wd-color-danger: #f87171;
+  color-scheme: dark;
+}
+
+/**
+ * Global motion guard. Nothing in this stylesheet animates today beyond
+ * Toast's entrance (toast.css), but a blanket `prefers-reduced-motion`
+ * override here — rather than one bespoke media query per component — means
+ * any transition/animation added later (to this file or a future one) is
+ * covered automatically instead of relying on every author to remember it.
+ */
+@media (prefers-reduced-motion: reduce) {
+  :host *,
+  :host *::before,
+  :host *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

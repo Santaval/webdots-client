@@ -1,0 +1,48 @@
+import type { AnchorDescriptor } from '../anchor/types';
+import type { PublicEvents } from './events';
+
+export type AnnotationStatus = 'OPEN' | 'RESOLVED';
+
+export type AnnotationPriority = 'LOW' | 'MEDIUM' | 'HIGH';
+
+/** The widget's interaction mode. */
+export type WidgetMode = 'idle' | 'annotate' | 'composing';
+
+/**
+ * Full annotation domain model, defined now so later milestones (API client,
+ * pins, forms) don't have to churn the shape. `anchor` is nullable to cover
+ * legacy rows created before the anchor column existed.
+ */
+export interface Annotation {
+  id: string;
+  pageUrl: string;
+  selector: string;
+  x: number;
+  y: number;
+  anchor: AnchorDescriptor | null;
+  title: string;
+  description?: string;
+  status: AnnotationStatus;
+  priority: AnnotationPriority;
+  authorName: string;
+  authorEmail?: string;
+  screenshot?: string | null;
+  resolvedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** The object returned by `init()` / exposed to consumers. */
+export interface WidgetHandle {
+  destroy(): void;
+  /** Re-fetch + re-render for the current pageKey. Call this after SPA route changes. */
+  refresh(): Promise<void>;
+  setMode(mode: WidgetMode): void;
+  getMode(): WidgetMode;
+  show(): void;
+  hide(): void;
+  /** Defensive copy of the currently-loaded annotations. */
+  getAnnotations(): readonly Annotation[];
+  on<K extends keyof PublicEvents>(event: K, handler: (payload: PublicEvents[K]) => void): () => void;
+  readonly version: string;
+}
