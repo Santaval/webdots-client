@@ -232,7 +232,11 @@ describe('HttpAnnotationAPI', () => {
 
         vi.stubGlobal(
           'fetch',
-          vi.fn(async (_url: string, _init?: RequestInit) => mockResponse(200, [])),
+          vi.fn(async (_url: string, _init?: RequestInit) => {
+            void _url;
+            void _init;
+            return mockResponse(200, []);
+          }),
         );
 
         for (let i = 0; i < 5; i += 1) {
@@ -253,7 +257,11 @@ describe('HttpAnnotationAPI', () => {
      */
     it('omits Content-Type on bodiless requests and sends it on bodied ones', async () => {
       const api = new HttpAnnotationAPI({ apiUrl: 'https://api.test/api/v1', requestTimeoutMs: 5000 });
-      const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => mockResponse(200, []));
+      const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => {
+        void _url;
+        void _init;
+        return mockResponse(200, []);
+      });
       vi.stubGlobal('fetch', fetchMock);
 
       await api.list({});

@@ -52,6 +52,7 @@ export class Toast {
   }
 
   private show(message: string): void {
+    // eslint-disable-next-line prefer-const
     let toastEl!: HTMLDivElement;
     const closeButton = h(
       'button',
