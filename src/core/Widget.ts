@@ -7,7 +7,10 @@ import type { Annotation, AnnotationPriority, AnnotationStatus, WidgetHandle, Wi
 import type { AnchorDescriptor, ResolveConfidence } from '../anchor/types';
 import { createAnchor } from '../anchor/createAnchor';
 import type { AnnotationAPI, UpdateAnnotationInput } from '../api/AnnotationAPI';
+import type { AuthAPI, MagicLinkSession } from '../api/AuthAPI';
 import { HttpAnnotationAPI } from '../api/HttpAnnotationAPI';
+import { HttpAuthAPI } from '../api/HttpAuthAPI';
+import { ExpiredCodeError } from '../api/errors';
 import { ShadowHost } from '../ui/ShadowHost';
 import { Toolbar } from '../ui/Toolbar';
 import { Overlay } from '../ui/Overlay';
@@ -16,6 +19,7 @@ import { Popover } from '../ui/Popover';
 import { AnnotationForm } from '../ui/AnnotationForm';
 import { AnnotationCard } from '../ui/AnnotationCard';
 import { Toast } from '../ui/Toast';
+import { AuthPanel } from '../ui/AuthPanel';
 import { Disposables } from '../utils/Disposables';
 import { createLogger } from '../utils/log';
 import { createId } from '../utils/id';
@@ -80,6 +84,7 @@ export class Widget implements WidgetHandle {
   private pinManager: PinManager;
   private highlighter: Highlighter;
   private api: AnnotationAPI;
+  private authApi: AuthAPI;
   private config: ResolvedWebdotsConfig;
   private visible = true;
   private log: ReturnType<typeof createLogger>;
@@ -105,6 +110,17 @@ export class Widget implements WidgetHandle {
 
   private toast: Toast;
 
+  // ---- M3 reviewer auth ------------------------------------------------
+  // The magic-link sign-in panel. Mounted only when `config.user` is absent
+  // (an embedder who already knows the reviewer passes `user` and skips the
+  // panel). Once `verifyMagicLink` succeeds, the session's `user` is written
+  // back into `config.user`, the panel unmounts, and annotate mode is
+  // un-gated. `lastAuthEmail` backs the "Resend" intent (re-request a link
+  // for the email the reviewer already entered) without the panel having to
+  // hold that state itself.
+  private authPanel: AuthPanel | null = null;
+  private lastAuthEmail = '';
+
   constructor(config: ResolvedWebdotsConfig, version: string) {
     this.version = version;
     this.config = config;
@@ -116,6 +132,17 @@ export class Widget implements WidgetHandle {
     this.api =
       config.api ??
       new HttpAnnotationAPI({
+        apiUrl: config.apiUrl,
+        apiKey: config.apiKey,
+        requestTimeoutMs: config.requestTimeoutMs,
+      });
+
+    // Auth API is instantiated unconditionally (it's a plain object — no
+    // network until a method is called). When `config.user` is already
+    // present the panel never mounts and this instance is simply unused.
+    this.authApi =
+      config.authApi ??
+      new HttpAuthAPI({
         apiUrl: config.apiUrl,
         apiKey: config.apiKey,
         requestTimeoutMs: config.requestTimeoutMs,
@@ -156,6 +183,17 @@ export class Widget implements WidgetHandle {
     this.shadowHost.shadowRoot.appendChild(this.toast.el);
     this.disposables.add(() => this.toast.dispose());
 
+    // M3: reviewer magic-link sign-in. Mounted only when no `user` was
+    // supplied at init — the panel is the runtime path to ESTABLISHING that
+    // user. An embedder who passes `user` skips the panel entirely.
+    if (!config.user) {
+      this.authPanel = new AuthPanel({ bus: this.bus });
+      this.shadowHost.shadowRoot.appendChild(this.authPanel.el);
+      this.disposables.add(() => this.authPanel?.dispose());
+      this.bus.emit('state:auth-state-changed', { phase: 'email' });
+      this.authPanel.focus();
+    }
+
     this.disposables.add(this.bus.on('intent:toggle-mode', () => this.handleToggleMode()));
     this.disposables.add(this.bus.on('intent:refresh', () => void this.refresh()));
     this.disposables.add(this.bus.on('intent:create-annotation', (payload) => this.handleCreateAnnotation(payload)));
@@ -171,6 +209,16 @@ export class Widget implements WidgetHandle {
     // the Store — see the class doc for why this beats each mutation
     // handler managing the popover's lifecycle itself.
     this.disposables.add(this.bus.on('state:annotations-changed', (diff) => this.reconcileDetailView(diff)));
+
+    // M3 reviewer-auth intents. The panel emits; Widget drives the AuthAPI
+    // and replies with `state:auth-state-changed`. Auth failures are NOT
+    // routed through the global `state:error` channel — the panel surfaces
+    // them inline (incl. the dedicated expired-code surface), so a Toast
+    // would just double-surface the same message.
+    this.disposables.add(this.bus.on('intent:request-magic-link', (payload) => void this.handleRequestMagicLink(payload.email)));
+    this.disposables.add(this.bus.on('intent:verify-magic-link', (payload) => void this.handleVerifyMagicLink(payload.code)));
+    this.disposables.add(this.bus.on('intent:cancel-auth', () => this.handleCancelAuth()));
+    this.disposables.add(this.bus.on('intent:resend-magic-link', () => void this.handleResendMagicLink()));
 
     // Capture-phase so annotate-mode clicks are intercepted BEFORE the host
     // page's own handlers run (required: clicking to annotate must not
@@ -192,7 +240,11 @@ export class Widget implements WidgetHandle {
     // generic `state:annotations-changed` bus event, which would also fire
     // for the transient optimistic `local_...` row and double-invoke it.
 
-    if (config.autoLoad) {
+    // autoLoad is deferred until AFTER the reviewer signs in when no `user`
+    // was supplied at init — there's no attribution identity (and no
+    // session) to load against until the magic-link flow completes. An
+    // embedder who passes `user` loads immediately, as before.
+    if (config.autoLoad && config.user) {
       void this.loadAnnotations();
     }
 
@@ -222,12 +274,90 @@ export class Widget implements WidgetHandle {
     this.bus.emit('state:error', { error });
   }
 
+  // ---- M3 reviewer auth ------------------------------------------------
+
+  private hasUser(): boolean {
+    return this.config.user !== undefined;
+  }
+
+  private async handleRequestMagicLink(email: string): Promise<void> {
+    this.lastAuthEmail = email;
+    this.bus.emit('state:auth-state-changed', { phase: 'requesting' });
+    try {
+      await this.authApi.requestMagicLink(email, this.abortController.signal);
+      if (this.abortController.signal.aborted) return;
+      this.bus.emit('state:auth-state-changed', { phase: 'code-sent' });
+    } catch (err) {
+      if (this.abortController.signal.aborted) return; // destroy() tore down the flow
+      this.bus.emit('state:auth-state-changed', { phase: 'email', error: toError(err) });
+    }
+  }
+
+  private async handleVerifyMagicLink(code: string): Promise<void> {
+    this.bus.emit('state:auth-state-changed', { phase: 'verifying' });
+    try {
+      const session = await this.authApi.verifyMagicLink(code, this.abortController.signal);
+      if (this.abortController.signal.aborted) return;
+      this.bus.emit('state:auth-state-changed', { phase: 'verified', session });
+      this.finishAuth(session);
+    } catch (err) {
+      if (this.abortController.signal.aborted) return;
+      const expired = err instanceof ExpiredCodeError;
+      this.bus.emit('state:auth-state-changed', { phase: 'code-sent', error: toError(err), expired });
+    }
+  }
+
+  private handleCancelAuth(): void {
+    // Reset to the email surface. A request in flight is NOT aborted (the
+    // session-level controller would cancel everything else too); its late
+    // resolution may emit a follow-up state that overrides this reset,
+    // which is acceptable for v1.
+    this.bus.emit('state:auth-state-changed', { phase: 'email' });
+  }
+
+  private async handleResendMagicLink(): Promise<void> {
+    if (!this.lastAuthEmail) {
+      this.bus.emit('state:auth-state-changed', { phase: 'email' });
+      return;
+    }
+    await this.handleRequestMagicLink(this.lastAuthEmail);
+  }
+
+  /**
+   * Writes the server-confirmed identity back into `config.user`, unmounts
+   * the AuthPanel, un-gates annotate mode, and — when `autoLoad` was on —
+   * performs the deferred initial annotation fetch now that attribution is
+   * possible. The session `token` is established here but NOT yet attached
+   * to annotation requests; wiring it into the annotations transport is
+   * issue #5's scope (this milestone only establishes the session).
+   */
+  private finishAuth(session: MagicLinkSession): void {
+    this.config.user = { name: session.user.name, email: session.user.email };
+    this.authPanel?.dispose();
+    this.authPanel = null;
+    if (this.config.autoLoad) {
+      void this.loadAnnotations();
+    }
+    this.log.debug('reviewer authenticated');
+  }
+
   private handleToggleMode(): void {
+    // Gated until a reviewer signs in — the AuthPanel's modal backdrop
+    // already blocks toolbar clicks while it's up, but this also covers a
+    // programmatic `setMode('annotate')` that bypasses the panel.
+    if (!this.hasUser()) {
+      this.log.warn('annotate mode is unavailable until the reviewer signs in.');
+      return;
+    }
     this.setMode(this.getMode() === 'annotate' ? 'idle' : 'annotate');
   }
 
   private handleDocumentClick(event: MouseEvent): void {
     if (this.getMode() !== 'annotate') return;
+    // Defensive: annotate mode is gated on sign-in, so this should never
+    // fire without a user — but a programmatic setMode could slip past the
+    // gate. Bail rather than create an annotation with no attribution.
+    if (!this.hasUser()) return;
 
     const path = typeof event.composedPath === 'function' ? event.composedPath() : [];
     const target = path[0];
@@ -309,6 +439,20 @@ export class Widget implements WidgetHandle {
     pageY: number,
     payload: { title: string; description?: string; priority: AnnotationPriority },
   ): Promise<void> {
+    // Defensive: annotate mode is gated on sign-in, so `config.user` should
+    // always be present here. If a race (e.g. sign-in completing mid-click)
+    // leaves it absent, bail with an onError rather than throwing on
+    // `undefined.name` deep in the optimistic-build below.
+    if (!this.config.user) {
+      this.reportError(new Error('[webdots] cannot create an annotation before the reviewer signs in.'));
+      return;
+    }
+    // Captured into a local so TS keeps the narrowed (non-undefined) type
+    // across the `this.store.upsert(...)` and `this.api.create(...)` calls
+    // below — narrowing on `this.config.user` (a property) is invalidated
+    // by any method call that TS must assume could reassign it.
+    const authorName = this.config.user.name;
+    const authorEmail = this.config.user.email;
     const tempId = createId('local');
     const now = new Date().toISOString();
     const optimistic: Annotation = {
@@ -322,8 +466,8 @@ export class Widget implements WidgetHandle {
       description: payload.description,
       status: 'OPEN',
       priority: payload.priority,
-      authorName: this.config.user.name,
-      authorEmail: this.config.user.email,
+      authorName,
+      authorEmail,
       screenshot: null,
       resolvedAt: null,
       createdAt: now,
@@ -342,8 +486,8 @@ export class Widget implements WidgetHandle {
           title: payload.title,
           description: payload.description,
           priority: payload.priority,
-          authorName: this.config.user.name,
-          authorEmail: this.config.user.email,
+          authorName,
+          authorEmail,
         },
         this.abortController.signal,
       );
@@ -601,6 +745,13 @@ export class Widget implements WidgetHandle {
   }
 
   setMode(mode: WidgetMode): void {
+    // Entering annotate/composing requires a signed-in reviewer for
+    // attribution. `handleToggleMode` already guards the toolbar path; this
+    // guards programmatic callers (e.g. `handle.setMode('annotate')`).
+    if ((mode === 'annotate' || mode === 'composing') && !this.hasUser()) {
+      this.log.warn('setMode: annotate/composing unavailable until the reviewer signs in.');
+      return;
+    }
     this.store.setMode(mode);
   }
 

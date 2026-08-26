@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { init, destroy, AuthError } from '../index';
+import { ExpiredCodeError } from '../api/errors';
 import type { AnnotationAPI, UpdateAnnotationInput } from '../api/AnnotationAPI';
+import type { AuthAPI, MagicLinkSession } from '../api/AuthAPI';
 import type { Annotation, AnnotationStatus } from './types';
 import type { AnchorDescriptor } from '../anchor/types';
 import type { WebdotsConfig } from './config';
@@ -45,6 +47,14 @@ function makeStubApi(initialList: Annotation[] = []) {
     })),
     remove: vi.fn(async (): Promise<void> => {}),
   } satisfies AnnotationAPI;
+}
+
+/** AuthAPI stub. Each method is a vi.fn() so a test can configure resolve/reject per path. */
+function makeStubAuthApi(session: MagicLinkSession = { token: 'tok_1', user: { name: 'Ada', email: 'ada@example.com' } }) {
+  return {
+    requestMagicLink: vi.fn(async (): Promise<void> => {}),
+    verifyMagicLink: vi.fn(async (): Promise<MagicLinkSession> => session),
+  } satisfies AuthAPI;
 }
 
 async function flush(): Promise<void> {
@@ -495,3 +505,117 @@ describe('Widget popover accessibility wiring (M6)', () => {
     expect(popover.getAttribute('aria-label')).toBe('Edit annotation');
   });
 });
+
+describe('Widget reviewer auth — magic link (M3, issue #4)', () => {
+  afterEach(() => {
+    destroy();
+    document.body.innerHTML = '';
+    vi.restoreAllMocks();
+  });
+
+  function visibleAuthTitle(root: ShadowRoot): string | null {
+    const title = Array.from(root.querySelectorAll('.wd-auth__title')).find((t) => !(t as HTMLElement).hidden);
+    return title?.textContent ?? null;
+  }
+
+  function fillAuthEmail(root: ShadowRoot, email: string): void {
+    (root.querySelector('[aria-label="Email address"]') as HTMLInputElement).value = email;
+  }
+
+  function submitAuthEmail(root: ShadowRoot): void {
+    (root.querySelector('.wd-auth__form') as HTMLFormElement).dispatchEvent(
+      new Event('submit', { bubbles: true, cancelable: true }),
+    );
+  }
+
+  function fillAuthCode(root: ShadowRoot, code: string): void {
+    (root.querySelector('[aria-label="Sign-in code"]') as HTMLInputElement).value = code;
+  }
+
+  function submitAuthCode(root: ShadowRoot): void {
+    // The code form is the second .wd-auth__form in the panel.
+    const forms = root.querySelectorAll('.wd-auth__form');
+    (forms[forms.length - 1] as HTMLFormElement).dispatchEvent(
+      new Event('submit', { bubbles: true, cancelable: true }),
+    );
+  }
+
+  it('mounts the AuthPanel and gates annotate mode when no user is supplied', async () => {
+    const api = makeStubApi();
+    const authApi = makeStubAuthApi();
+    const { handle, root } = await mount(api, { user: undefined, authApi });
+
+    expect(root.querySelector('.wd-auth')).not.toBeNull();
+
+    // Annotate mode is gated until the reviewer signs in: a programmatic
+    // setMode('annotate') is a no-op rather than entering annotate.
+    handle.setMode('annotate');
+    expect(handle.getMode()).toBe('idle');
+  });
+
+  it('an embedder who supplies user skips the AuthPanel entirely', async () => {
+    const api = makeStubApi();
+    const { root } = await mount(api); // default mount passes user: { name: 'QA Tester' }
+
+    expect(root.querySelector('.wd-auth')).toBeNull();
+  });
+
+  // Issue #4 acceptance: the happy path.
+  it('happy path: email -> code -> verified unmounts the panel, enables annotate, and runs the deferred autoLoad', async () => {
+    const api = makeStubApi([makeAnnotation()]);
+    const authApi = makeStubAuthApi();
+    const { handle, root } = await mount(api, { user: undefined, authApi });
+
+    // autoLoad was deferred (no user at init), so list() has NOT been called yet.
+    expect(api.list).not.toHaveBeenCalled();
+
+    // Email entry.
+    fillAuthEmail(root, 'ada@example.com');
+    submitAuthEmail(root);
+    await flush();
+    expect(authApi.requestMagicLink).toHaveBeenCalledWith('ada@example.com', expect.anything());
+    expect(visibleAuthTitle(root)).toBe('Enter your code');
+
+    // Code entry.
+    fillAuthCode(root, 'ABC123');
+    submitAuthCode(root);
+    await flush();
+    expect(authApi.verifyMagicLink).toHaveBeenCalledWith('ABC123', expect.anything());
+
+    // The panel unmounts on success.
+    expect(root.querySelector('.wd-auth')).toBeNull();
+
+    // Annotate is now un-gated.
+    handle.setMode('annotate');
+    expect(handle.getMode()).toBe('annotate');
+
+    // The deferred autoLoad now runs (attribution identity is established).
+    expect(api.list).toHaveBeenCalledTimes(1);
+  });
+
+  // Issue #4 acceptance: the expired-code path.
+  it('expired path: a 410 leaves the panel open on the expired-code surface and keeps annotate gated', async () => {
+    const api = makeStubApi();
+    const authApi = makeStubAuthApi();
+    authApi.verifyMagicLink.mockRejectedValueOnce(new ExpiredCodeError(410, 'https://api.example.com/api/v1/auth/magic-link/verify'));
+
+    const { handle, root } = await mount(api, { user: undefined, authApi });
+
+    fillAuthEmail(root, 'ada@example.com');
+    submitAuthEmail(root);
+    await flush();
+
+    fillAuthCode(root, 'STALE');
+    submitAuthCode(root);
+    await flush();
+
+    // The panel stays open on the code surface, showing the expired surface.
+    expect(root.querySelector('.wd-auth')).not.toBeNull();
+    expect((root.querySelector('.wd-auth__expired') as HTMLElement).hidden).toBe(false);
+
+    // Annotate remains gated (no user was established).
+    handle.setMode('annotate');
+    expect(handle.getMode()).toBe('idle');
+  });
+});
+

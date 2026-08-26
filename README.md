@@ -46,7 +46,7 @@ const widget = init({
 widget.destroy();
 ```
 
-Only `apiUrl` and `user.name` are required at the type level; `apiKey` is additionally required when targeting the hosted webdots server (see [Authentication](#authentication)). Everything else has a sensible default.
+Only `apiUrl` is required at the type level; `user` is optional — when omitted, the widget mounts a magic-link sign-in panel and the reviewer establishes their identity (and `user`) at runtime. `apiKey` is additionally required when targeting the hosted webdots server (see [Authentication](#authentication)). Everything else has a sensible default.
 
 ---
 
@@ -58,7 +58,7 @@ Only `apiUrl` and `user.name` are required at the type level; `apiKey` is additi
 | --- | --- | --- | --- |
 | `apiUrl` | `string` | — | **Required.** Base URL of the annotations API, e.g. `https://api.example.com/api/v1`. Must be an absolute URL. |
 | `apiKey` | `string` | — | **Required for the hosted webdots server** (sent as the `x-api-key` header on every request). Omit only for a stub/demo or a self-hosted backend with `REQUIRE_API_KEY` disabled. See [Authentication](#authentication). |
-| `user` | `{ name: string; email?: string }` | — | **Required** (`name` at minimum). Used for annotation attribution. |
+| `user` | `{ name: string; email?: string }` | — | Reviewer identity for annotation attribution. **Optional** as of M3: omit it to mount the magic-link sign-in panel (see [Reviewer sign-in](#reviewer-sign-in)), or pass it to skip the panel when the embedder already knows the reviewer. |
 | `pageKey` | `string \| (url: URL) => string` | `origin + pathname` | How annotations are scoped to a page. The default drops query string and hash so `?utm_source=…` doesn't create a separate bucket. Resolved **once** at `init()`. |
 | `autoLoad` | `boolean` | `true` | Fetch and render existing annotations on init. |
 | `showResolved` | `boolean` | `false` | Render resolved annotations. When `false`, resolving an annotation removes its pin. |
@@ -128,6 +128,37 @@ init({ apiUrl: 'https://unused.example', user: { name: 'QA' }, api: myApi });
 ```
 
 Every method receives an `AbortSignal` so `destroy()` can cancel in-flight work. All methods return the internal `Annotation` model — the wire format is confined to a single mapping module, so backend drift never reaches the UI.
+
+---
+
+## Reviewer sign-in (magic link)
+
+Reviewers sign in via an email magic link. Because the widget is embedded in arbitrary host pages (where a link redirect would lose the embed context), the primary flow is **pasting the short code** from the email into the widget's own panel — not following the link.
+
+When `init()` is called **without** a `user`, the widget mounts a sign-in panel in its Shadow DOM instead of going straight into annotation mode:
+
+```ts
+import { init } from '@webdots/annotate-client';
+
+const widget = init({
+  apiUrl: 'https://api.webdots.app/api/v1',
+  apiKey: 'your-project-key',
+  // no `user` — a reviewer signs in via the panel
+});
+```
+
+The panel drives two endpoints on the configured `apiUrl`:
+
+| Method | Path | Notes |
+| --- | --- | --- |
+| `POST` | `/auth/magic-link` | Body `{ email }`. Returns `204 No Content`. |
+| `POST` | `/auth/magic-link/verify` | Body `{ code }`. Returns `200` with `{ token, user: { name, email } }`. |
+
+An expired or invalid code is signalled by the server as `410 Gone` and rendered as a dedicated **expired-code** surface with a "Resend" action. Loading, error, and expired states are all themed through the widget's existing design tokens, and the whole flow ships with zero runtime dependencies.
+
+Once verification succeeds, the returned `user` is written back into the widget's config, the panel unmounts, annotation loading runs (if `autoLoad` is on), and annotate mode becomes available. An embedder who already knows the reviewer can pass `user` at `init()` to skip the panel entirely.
+
+The session `token` is established by this flow but not yet attached to annotation requests — wiring it into the annotations transport is tracked separately (#5).
 
 ---
 

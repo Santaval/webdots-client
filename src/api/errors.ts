@@ -44,6 +44,31 @@ export class AuthError extends ApiError {
   }
 }
 
+/**
+ * 410 Gone from `/auth/magic-link/verify` — the submitted code has expired
+ * (or was never valid). Fixed copy (not the server's message), mirroring
+ * `AuthError`'s reasoning: an expired code is a recognizable, recoverable
+ * state the UI branches on (the AuthPanel shows its dedicated expired-code
+ * surface + "Resend"), so the hint must always read identically rather than
+ * echo whatever the server happened to return. The server body is therefore
+ * NOT forwarded, exactly like `AuthError`.
+ *
+ * Subclasses `ApiError` so anything branching on `ApiError` (status, url)
+ * keeps working, and so `HttpAuthAPI` can surface it through the shared
+ * `api/http.ts` `mapError` hook without `HttpAnnotationAPI` knowing a 410
+ * exists. Stays internal — the AuthPanel receives an `expired` boolean on
+ * `state:auth-state-changed`, never this type, so it need not import the
+ * error hierarchy (same "error types stay confined to api/" rule that keeps
+ * `NetworkError`/`TimeoutError` out of the public surface).
+ */
+export class ExpiredCodeError extends ApiError {
+  constructor(status: number, url: string) {
+    super(status, url);
+    this.message = 'That sign-in code has expired or is invalid — request a new one.';
+    this.name = 'ExpiredCodeError';
+  }
+}
+
 /** fetch itself failed (offline, DNS, CORS, connection refused…), not an HTTP error response. */
 export class NetworkError extends Error {
   readonly url: string;
