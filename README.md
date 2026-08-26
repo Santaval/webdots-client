@@ -46,7 +46,7 @@ const widget = init({
 widget.destroy();
 ```
 
-Only `apiUrl` and `user.name` are required. Everything else has a sensible default.
+Only `apiUrl` and `user.name` are required at the type level; `apiKey` is additionally required when targeting the hosted webdots server (see [Authentication](#authentication)). Everything else has a sensible default.
 
 ---
 
@@ -57,7 +57,7 @@ Only `apiUrl` and `user.name` are required. Everything else has a sensible defau
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `apiUrl` | `string` | — | **Required.** Base URL of the annotations API, e.g. `https://api.example.com/api/v1`. Must be an absolute URL. |
-| `apiKey` | `string` | — | Sent as the `x-api-key` header on every request. Omit if your backend is unauthenticated. |
+| `apiKey` | `string` | — | **Required for the hosted webdots server** (sent as the `x-api-key` header on every request). Omit only for a stub/demo or a self-hosted backend with `REQUIRE_API_KEY` disabled. See [Authentication](#authentication). |
 | `user` | `{ name: string; email?: string }` | — | **Required** (`name` at minimum). Used for annotation attribution. |
 | `pageKey` | `string \| (url: URL) => string` | `origin + pathname` | How annotations are scoped to a page. The default drops query string and hash so `?utm_source=…` doesn't create a separate bucket. Resolved **once** at `init()`. |
 | `autoLoad` | `boolean` | `true` | Fetch and render existing annotations on init. |
@@ -143,7 +143,43 @@ The default transport calls:
 | `PATCH` | `/annotations/:id/status` | Body is exactly `{ "status": "OPEN" \| "RESOLVED" }`. Separate from the generic `PATCH`. |
 | `DELETE` | `/annotations/:id` | Expects `204` with no body. |
 
-Errors are expected as `{ "message": "…" }`. For `4xx` the server's message is surfaced to the user verbatim; for `5xx`, network, and timeout failures, generic copy is shown instead so internal detail is never leaked into the UI.
+### Authentication
+
+The hosted webdots server enforces API keys via the `REQUIRE_API_KEY` flag (Santaval/webdots#7). When enforcement is on, **every** request must carry a valid `x-api-key` header, which the client sets from `config.apiKey`. Configure it at `init()`:
+
+```ts
+init({
+  apiUrl: 'https://api.webdots.app/api/v1',
+  apiKey: 'your-project-key', // required for the hosted server
+  user: { name: 'Dana Reyes' },
+});
+```
+
+A missing or invalid key makes the server respond `401`/`403`, which the client surfaces as a single clear auth failure — never a silent drop:
+
+- the in-flight optimistic pin rolls back, so no orphaned local state is left behind;
+- `config.onError` fires with an `AuthError` (exported from the package) so your app can branch on it — e.g. prompt the user for a fresh key;
+- a non-blocking toast appears in the widget's Shadow DOM with the message *"Authentication failed — your API key is missing or invalid."*
+
+```ts
+import { init, AuthError } from '@webdots/annotate-client';
+
+const handle = init({
+  apiUrl: 'https://api.webdots.app/api/v1',
+  apiKey: process.env.WEBDOTS_API_KEY!,
+  user: { name: 'Dana Reyes' },
+  onError(error) {
+    if (error instanceof AuthError) {
+      // key expired or was revoked — re-prompt, don't retry blindly
+      showReconfigureKeyPrompt();
+    }
+  },
+});
+```
+
+`apiKey` stays **optional in the types** so the stub/demo, a custom `config.api` backend, and a self-hosted server with `REQUIRE_API_KEY` disabled keep working without a key.
+
+Errors are expected as `{ "message": "…" }`. For `4xx` (other than 401/403) the server's message is surfaced to the user verbatim; for `5xx`, network, and timeout failures, generic copy is shown instead so internal detail is never leaked into the UI. `401`/`403` always render the fixed auth message above, regardless of any server body.
 
 ### CORS
 

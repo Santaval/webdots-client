@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { HttpAnnotationAPI } from './HttpAnnotationAPI';
-import { ApiError, NetworkError, TimeoutError } from './errors';
+import { ApiError, AuthError, NetworkError, TimeoutError } from './errors';
 import type { CreateAnnotationInput } from './AnnotationAPI';
 import type { AnchorDescriptor } from '../anchor/types';
 
@@ -164,6 +164,71 @@ describe('HttpAnnotationAPI', () => {
     expect((caught as ApiError).status).toBe(400);
     expect((caught as ApiError).message).toBe('El título es requerido');
     expect((caught as ApiError).serverMessage).toBe('El título es requerido');
+  });
+
+  it('rejects with AuthError (a subclass of ApiError) on a 401, with fixed auth copy', async () => {
+    const fetchMock = abortableFetchMock(() => mockResponse(401));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const api = new HttpAnnotationAPI({ apiUrl: 'https://api.test/v1', apiKey: 'wrong', requestTimeoutMs: 5000 });
+    let caught: unknown;
+    try {
+      await api.list({});
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(AuthError);
+    // Subclass relationship: still usable anywhere an ApiError is expected.
+    expect(caught).toBeInstanceOf(ApiError);
+    expect((caught as AuthError).status).toBe(401);
+    expect((caught as AuthError).name).toBe('AuthError');
+    // Fixed copy — not the generic "Request to … failed with status 401."
+    // a bodyless 401 would otherwise produce.
+    expect((caught as AuthError).message).toBe('Authentication failed — your API key is missing or invalid.');
+  });
+
+  it('rejects with AuthError on a 403 as well', async () => {
+    const fetchMock = abortableFetchMock(() => mockResponse(403));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const api = new HttpAnnotationAPI({ apiUrl: 'https://api.test/v1', apiKey: 'revoked', requestTimeoutMs: 5000 });
+    let caught: unknown;
+    try {
+      await api.create({
+        pageUrl: 'https://example.com/page',
+        selector: 'button',
+        x: 1,
+        y: 2,
+        anchor,
+        title: 'Title',
+        authorName: 'QA',
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(AuthError);
+    expect((caught as AuthError).status).toBe(403);
+  });
+
+  it('ignores the server body for 401/403 — auth copy is always the fixed message, not the server message', async () => {
+    // The server may return its own {message} on an auth failure; the client
+    // must surface the recognizable auth hint regardless, per errors.ts's
+    // module doc (401/403 are the exception to the verbatim-4xx rule).
+    const fetchMock = abortableFetchMock(() => mockResponse(401, { message: 'Invalid API key "wrong"' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const api = new HttpAnnotationAPI({ apiUrl: 'https://api.test/v1', apiKey: 'wrong', requestTimeoutMs: 5000 });
+    let caught: unknown;
+    try {
+      await api.list({});
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(AuthError);
+    expect((caught as AuthError).message).toBe('Authentication failed — your API key is missing or invalid.');
+    // The server's message must not leak through for auth failures.
+    expect((caught as AuthError).message).not.toContain('Invalid API key');
+    expect((caught as AuthError).serverMessage).toBeUndefined();
   });
 
   it('uses generic English copy for a 5xx response, ignoring any server body', async () => {
