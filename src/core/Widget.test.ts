@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { init, destroy } from '../index';
+import { init, destroy, AuthError } from '../index';
 import type { AnnotationAPI, UpdateAnnotationInput } from '../api/AnnotationAPI';
 import type { Annotation, AnnotationStatus } from './types';
 import type { AnchorDescriptor } from '../anchor/types';
@@ -312,6 +312,43 @@ describe('Widget M5 robustness', () => {
     await flush();
 
     expect(root.querySelector('.wd-toast__message')).not.toBeNull();
+  });
+
+  // Issue #3: once the server enforces API keys, a 401/403 must not fail
+  // silently inside the optimistic-update flow — the pin rolls back, onError
+  // fires with an AuthError the host app can branch on, and a toast makes
+  // the failure visible in the shadow DOM. HttpAnnotationAPI.test.ts owns
+  // the 401 -> AuthError mapping; this pins AuthError -> rollback + onError
+  // + toast end-to-end through the Widget.
+  it('an AuthError from create() rolls back the optimistic pin, fires onError with the AuthError, and shows a toast', async () => {
+    const api = makeStubApi([]);
+    api.create.mockRejectedValueOnce(new AuthError(401, 'https://api.example.com/api/v1/annotations'));
+    const onError = vi.fn();
+    const { handle, root } = await mount(api, { onError });
+
+    handle.setMode('annotate');
+    const target = document.createElement('button');
+    document.body.appendChild(target);
+    target.dispatchEvent(new MouseEvent('click', { bubbles: true, composed: true, clientX: 5, clientY: 5 }));
+
+    const titleInput = root.querySelector('[aria-label="Annotation title"]') as HTMLInputElement;
+    titleInput.value = 'New issue';
+    const form = root.querySelector('.wd-form') as HTMLFormElement;
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+
+    await flush();
+
+    // Acceptance criterion: no orphaned optimistic pins.
+    expect(handle.getAnnotations()).toHaveLength(0);
+    // onError fired exactly once, with the AuthError instance — so the host
+    // app can `instanceof AuthError` to prompt for a fresh key.
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError.mock.calls[0]![0]).toBeInstanceOf(AuthError);
+    // Visible error in the shadow DOM, with the fixed auth copy.
+    const toastMessage = root.querySelector('.wd-toast__message');
+    expect(toastMessage).not.toBeNull();
+    expect(toastMessage?.textContent).toBe('Authentication failed — your API key is missing or invalid.');
+    target.remove();
   });
 
   it('a pin resolved at orphaned confidence shows the "position may have shifted" style notice when its card is opened', async () => {

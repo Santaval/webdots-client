@@ -1,7 +1,7 @@
 import type { AnnotationAPI, CreateAnnotationInput, ListAnnotationsQuery, UpdateAnnotationInput } from './AnnotationAPI';
 import type { Annotation, AnnotationStatus } from '../core/types';
 import { annotationFromWire, toCreateBody, toUpdateBody, type AnnotationWire } from './dto';
-import { ApiError, NetworkError, TimeoutError } from './errors';
+import { ApiError, AuthError, NetworkError, TimeoutError } from './errors';
 
 export interface HttpAnnotationAPIOptions {
   apiUrl: string;
@@ -21,6 +21,9 @@ export interface HttpAnnotationAPIOptions {
  *  - composes that internal timeout signal with the CALLER's `AbortSignal`
  *    (when given) so `Widget.destroy()` aborting its own controller cancels
  *    in-flight requests too — neither signal can starve the other.
+ *  - rejects with `AuthError` (a subclass of `ApiError`) on 401/403, so a
+ *    missing/invalid key surfaces as a recognizable auth failure rather
+ *    than a generic status error — see errors.ts.
  */
 export class HttpAnnotationAPI implements AnnotationAPI {
   private readonly baseUrl: string;
@@ -134,6 +137,14 @@ export class HttpAnnotationAPI implements AnnotationAPI {
     }
 
     if (!response.ok) {
+      // 401/403 are auth failures first, HTTP errors second — a missing or
+      // invalid `x-api-key` must read as an auth problem at a glance, not as
+      // the generic status copy a bodyless 401 would otherwise produce. The
+      // server's own message is deliberately ignored here so the auth hint
+      // is always identical — see errors.ts's module doc.
+      if (response.status === 401 || response.status === 403) {
+        throw new AuthError(response.status, url);
+      }
       const serverMessage = isServerMessagePayload(payload) ? payload.message : undefined;
       throw new ApiError(response.status, url, serverMessage);
     }
