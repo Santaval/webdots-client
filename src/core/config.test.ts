@@ -107,10 +107,18 @@ describe('resolveConfig', () => {
     ).toThrow(/user\.name/);
   });
 
-  it('fails fast when user is missing entirely', () => {
-    expect(() =>
-      resolveConfig({ apiUrl: baseConfig.apiUrl } as unknown as WebdotsConfig),
-    ).toThrow(/config\.user/);
+  it('user is optional as of M3: omitting it resolves to undefined (reviewer signs in via magic link)', () => {
+    const resolved = resolveConfig({ apiUrl: baseConfig.apiUrl } as unknown as WebdotsConfig);
+    expect(resolved.user).toBeUndefined();
+  });
+
+  it('accepts a supplied AuthAPI as the DI escape hatch', () => {
+    const stubAuthApi = {
+      requestMagicLink: async () => {},
+      verifyMagicLink: async () => ({ token: 't', user: { name: 'n', email: 'e' } }),
+    };
+    const resolved = resolveConfig({ ...baseConfig, authApi: stubAuthApi });
+    expect(resolved.authApi).toBe(stubAuthApi);
   });
 
   it('fails fast when container is not an HTMLElement', () => {

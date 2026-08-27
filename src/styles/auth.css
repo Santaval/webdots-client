@@ -1,0 +1,110 @@
+/**
+ * AuthPanel.ts — M3 reviewer magic-link sign-in. A centered modal-style
+ * panel (NOT pin-anchored like Popover), so it uses its own chrome rather
+ * than `.wd-popover`. The form field internals reuse `.wd-form__*` from
+ * popover.css for visual consistency with the annotation composer, so only
+ * the panel shell and the state-specific surfaces (loading / error /
+ * expired / success) live here.
+ *
+ * Same "full-viewport layer, pointer-events:none on the shell, only the
+ * card opts back in" pattern as Toast/Overlay, except the backdrop also
+ * opts in so it can focus attention during the mandatory sign-in step
+ * (annotate mode is gated until a reviewer verifies, so there's nothing
+ * else to interact with anyway).
+ */
+.wd-auth {
+  all: initial;
+  box-sizing: border-box;
+  position: fixed;
+  inset: 0;
+  z-index: var(--wd-z-popover);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--wd-space-4);
+  background: rgba(0, 0, 0, 0.35);
+  pointer-events: auto;
+  font-family: var(--wd-font-family);
+  font-size: var(--wd-font-size);
+  color: var(--wd-color-text);
+}
+
+.wd-auth__card {
+  box-sizing: border-box;
+  width: 320px;
+  max-width: 100%;
+  background: var(--wd-color-bg);
+  border: 1px solid var(--wd-color-border);
+  border-radius: var(--wd-radius-md);
+  box-shadow: var(--wd-shadow-toolbar);
+  padding: var(--wd-space-4);
+}
+
+.wd-auth__title {
+  margin: 0 0 var(--wd-space-1);
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.wd-auth__subtitle {
+  margin: 0 0 var(--wd-space-3);
+  color: var(--wd-color-text-muted);
+  font-size: 12px;
+}
+
+.wd-auth__hint {
+  margin: var(--wd-space-2) 0 0;
+  color: var(--wd-color-text-muted);
+  font-size: 11px;
+}
+
+.wd-auth__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--wd-space-2);
+  margin-top: var(--wd-space-3);
+}
+
+/* Reuses .wd-form__field / .wd-form__label / .wd-form__input / .wd-form__button
+   from popover.css — same field chrome as the annotation composer. */
+.wd-auth__error {
+  color: var(--wd-color-danger);
+  font-size: 12px;
+  margin: -4px 0 var(--wd-space-2);
+}
+
+.wd-auth__expired {
+  color: var(--wd-color-danger);
+  font-size: 12px;
+  margin: -4px 0 var(--wd-space-2);
+}
+
+.wd-auth__resend {
+  all: unset;
+  box-sizing: border-box;
+  padding: var(--wd-space-1) 0;
+  color: var(--wd-color-accent);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.wd-auth__resend:focus-visible {
+  outline: 2px solid var(--wd-color-accent);
+  outline-offset: 2px;
+}
+
+.wd-auth__success {
+  color: var(--wd-color-text-muted);
+  font-size: 12px;
+  margin: 0;
+}
+
+/* Loading state: disable the whole card's inputs while a request is in
+   flight. The attribute is toggled on the card by AuthPanel. */
+.wd-auth__card[data-loading='true'] .wd-form__input,
+.wd-auth__card[data-loading='true'] .wd-form__button,
+.wd-auth__card[data-loading='true'] .wd-auth__resend {
+  opacity: 0.6;
+  pointer-events: none;
+}

@@ -1,16 +1,23 @@
 import type { Annotation, WidgetMode } from './types';
 import type { AnnotationAPI } from '../api/AnnotationAPI';
+import type { AuthAPI } from '../api/AuthAPI';
 import { resolvePageKey, assertValidPageKey, type PageKeyResolver } from '../utils/pageKey';
 
 /**
- * Public configuration surface. `api` is a DI escape hatch: supply any
- * `AnnotationAPI` implementation (e.g. a test stub) to override the
- * default `HttpAnnotationAPI` built from `apiUrl`/`apiKey`.
+ * Public configuration surface. `api`/`authApi` are DI escape hatches: supply
+ * any `AnnotationAPI`/`AuthAPI` implementation (e.g. a test stub) to override
+ * the default HTTP implementations built from `apiUrl`/`apiKey`.
  */
 export interface WebdotsConfig {
   apiUrl: string;
   apiKey?: string;
-  user: { name: string; email?: string };
+  /**
+   * Reviewer identity for annotation attribution. Optional as of M3: when
+   * omitted, the widget mounts the magic-link sign-in panel and a reviewer
+   * signs in to establish `user` (and a session) at runtime. An embedder
+   * who already knows the reviewer may still pass it to skip the panel.
+   */
+  user?: { name: string; email?: string };
 
   /** Default: origin + pathname of `location` (query/hash dropped). See utils/pageKey.ts. */
   pageKey?: PageKeyResolver;
@@ -24,8 +31,10 @@ export interface WebdotsConfig {
   requestTimeoutMs?: number;
   debug?: boolean;
 
-  /** DI escape hatch; overrides apiUrl/apiKey. */
+  /** DI escape hatch; overrides apiUrl/apiKey for the annotations API. */
   api?: AnnotationAPI;
+  /** DI escape hatch; overrides apiUrl/apiKey for the auth (magic-link) API. */
+  authApi?: AuthAPI;
   onError?: (error: Error) => void;
   onAnnotationCreated?: (a: Annotation) => void;
   onModeChange?: (mode: WidgetMode) => void;
@@ -37,11 +46,13 @@ export interface WebdotsConfig {
  * current `location` — see utils/pageKey.ts's module doc for why it's not
  * recomputed per-request: the plan treats SPA navigation as an explicit
  * `handle.refresh()` concern, not something this library auto-detects).
+ * `user` is `undefined` until a reviewer completes magic-link sign-in (or
+ * immediately when the embedder supplied one).
  */
 export interface ResolvedWebdotsConfig {
   apiUrl: string;
   apiKey: string | undefined;
-  user: { name: string; email: string | undefined };
+  user: { name: string; email: string | undefined } | undefined;
   pageKey: string;
   autoLoad: boolean;
   showResolved: boolean;
@@ -53,6 +64,7 @@ export interface ResolvedWebdotsConfig {
   requestTimeoutMs: number;
   debug: boolean;
   api: AnnotationAPI | undefined;
+  authApi: AuthAPI | undefined;
   onError: ((error: Error) => void) | undefined;
   onAnnotationCreated: ((a: Annotation) => void) | undefined;
   onModeChange: ((mode: WidgetMode) => void) | undefined;
@@ -84,12 +96,12 @@ export function resolveConfig(raw: WebdotsConfig): ResolvedWebdotsConfig {
     throw new Error(`[webdots] config.apiUrl must be a valid absolute URL, got: "${raw.apiUrl}"`);
   }
 
-  if (!raw.user || typeof raw.user !== 'object') {
-    throw new Error('[webdots] config.user is required (expected { name, email? }).');
+  if (raw.user !== undefined && (typeof raw.user !== 'object' || raw.user === null)) {
+    throw new Error('[webdots] config.user must be an object ({ name, email? }) when provided.');
   }
 
-  if (!raw.user.name || typeof raw.user.name !== 'string') {
-    throw new Error('[webdots] config.user.name is required and must be a non-empty string.');
+  if (raw.user && (!raw.user.name || typeof raw.user.name !== 'string')) {
+    throw new Error('[webdots] config.user.name must be a non-empty string when user is provided.');
   }
 
   if (raw.container !== undefined && !(raw.container instanceof HTMLElement)) {
@@ -125,7 +137,7 @@ export function resolveConfig(raw: WebdotsConfig): ResolvedWebdotsConfig {
   return {
     apiUrl: raw.apiUrl,
     apiKey: raw.apiKey,
-    user: { name: raw.user.name, email: raw.user.email },
+    user: raw.user ? { name: raw.user.name, email: raw.user.email } : undefined,
     pageKey,
     autoLoad: raw.autoLoad ?? true,
     showResolved: raw.showResolved ?? false,
@@ -137,6 +149,7 @@ export function resolveConfig(raw: WebdotsConfig): ResolvedWebdotsConfig {
     requestTimeoutMs: raw.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
     debug: raw.debug ?? false,
     api: raw.api,
+    authApi: raw.authApi,
     onError: raw.onError,
     onAnnotationCreated: raw.onAnnotationCreated,
     onModeChange: raw.onModeChange,

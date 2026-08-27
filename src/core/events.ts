@@ -1,5 +1,6 @@
 import type { Annotation, AnnotationPriority, AnnotationStatus, WidgetMode } from './types';
 import type { ResolveConfidence } from '../anchor/types';
+import type { MagicLinkSession } from '../api/AuthAPI';
 
 /**
  * Single source of truth for every event the internal EventBus carries.
@@ -41,6 +42,19 @@ export interface WebdotsEvents {
   'intent:change-status': { status: AnnotationStatus };
   'intent:delete-annotation': undefined;
 
+  // ---- auth intents (AuthPanel -> Widget) ----------------------------
+  // M3 reviewer magic-link sign-in. AuthPanel emits these; Widget drives the
+  // AuthAPI and replies with `state:auth-state-changed`. Same intent/state
+  // split as the annotation family — the panel never calls the API itself.
+  /** Email-entry submit. Widget calls `authApi.requestMagicLink(email)`. */
+  'intent:request-magic-link': { email: string };
+  /** Code-entry submit. Widget calls `authApi.verifyMagicLink(code)`. */
+  'intent:verify-magic-link': { code: string };
+  /** Cancel/Escape from the panel — Widget returns to the email phase. */
+  'intent:cancel-auth': undefined;
+  /** "Resend" from the expired-code surface — Widget re-requests a link for the last email. */
+  'intent:resend-magic-link': undefined;
+
   // ---- state (Widget/Store -> UI) -------------------------------------
   'state:mode-changed': { mode: WidgetMode };
   'state:visibility-changed': { visible: boolean };
@@ -59,7 +73,36 @@ export interface WebdotsEvents {
    * Toolbar's "N unplaced" tray to list them without importing Store.
    */
   'state:unplaced-changed': { annotations: Array<{ id: string; title: string; authorName: string }> };
+  /**
+   * M3 reviewer auth. Widget emits this after every auth intent resolves
+   * (or rejects). `phase` drives the AuthPanel's surface; `error`/`expired`
+   * carry the failure detail (the panel branches on `expired` rather than
+   * on the `ExpiredCodeError` type, so it need not import the error
+   * hierarchy — same "error types stay confined to api/" rule as Toast);
+   * `session` is set only on `phase: 'verified'`, after which Widget writes
+   * it back into `config.user` and unmounts the panel.
+   */
+  'state:auth-state-changed': {
+    phase: AuthPhase;
+    error?: Error;
+    expired?: boolean;
+    session?: MagicLinkSession;
+  };
 }
+
+/**
+ * The AuthPanel's lifecycle states. `'idle'` is the Widget's pre-panel value
+ * (no auth flow running); the panel mounts into `'email'` and Widget drives
+ * it through `'requesting'` -> `'code-sent'` -> `'verifying'` ->
+ * `'verified'` as the flow progresses. Failures are NOT a separate phase:
+ * the panel re-renders the surface the failure occurred on (`'email'` or
+ * `'code-sent'`) with an `error`/`expired` companion on the same event, so
+ * the user stays in context — a rejected `requestMagicLink` returns to the
+ * email field with its error, a rejected `verifyMagicLink` returns to the
+ * code field with its error (or the dedicated expired surface when
+ * `expired: true`). This is issue #4's expired-code path.
+ */
+export type AuthPhase = 'idle' | 'email' | 'requesting' | 'code-sent' | 'verifying' | 'verified';
 
 /** Event names available to library consumers via `handle.on()`. */
 export type PublicEventName = 'state:mode-changed' | 'state:visibility-changed';

@@ -40,6 +40,7 @@ export type { WidgetHandle, WidgetMode, Annotation, AnnotationStatus, Annotation
 export type { AnchorDescriptor } from './anchor/types';
 export type { PublicEvents } from './core/events';
 export type { AnnotationAPI, ListAnnotationsQuery, CreateAnnotationInput, UpdateAnnotationInput } from './api/AnnotationAPI';
+export type { AuthAPI, MagicLinkSession } from './api/AuthAPI';
 // `AuthError` is the one error type worth exporting: a consumer can branch on
 // `error instanceof AuthError` inside `onError` to e.g. prompt for a fresh API
 // key. `ApiError`/`NetworkError`/`TimeoutError` stay internal — their copy is
