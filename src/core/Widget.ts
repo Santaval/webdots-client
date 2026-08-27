@@ -209,23 +209,34 @@ export class Widget implements WidgetHandle {
     this.shadowHost.shadowRoot.appendChild(this.toast.el);
     this.disposables.add(() => this.toast.dispose());
 
-    // M3: reviewer magic-link sign-in. Mounted only when no `user` was
-    // supplied at init — the panel is the runtime path to ESTABLISHING that
-    // user. An embedder who passes `user` skips the panel entirely.
-    // #5: when no `user` was supplied, a session persisted from a PRIOR
-    // sign-in (namespaced by apiUrl + pageKey) is restored — the token
-    // survives reload and annotate stays un-gated, no re-prompt. The stored
-    // token is trusted optimistically; if it has since expired, the first
-    // annotation request 401s and `expireSession()` re-opens the panel.
-    if (!config.user) {
-      const stored = loadSession(config.apiUrl, config.pageKey);
-      if (stored) {
-        this.config.user = { name: stored.user.name, email: stored.user.email };
-        this.sessionToken = stored.token;
-        this.sessionExpired = false; // a live restored session resets the latch
-      } else {
-        this.mountAuthPanel();
+    // M3: reviewer magic-link sign-in. The panel is the runtime path to
+    // ESTABLISHING a reviewer identity when neither an embedder-supplied
+    // `user` nor a stored session exists at init. An embedder who already
+    // knows the reviewer passes `user` and skips the panel entirely.
+    // #5: a session persisted from a PRIOR sign-in (namespaced by apiUrl +
+    // pageKey) is restored on reload — the token survives and annotate stays
+    // un-gated, no re-prompt. The stored token is trusted optimistically; if
+    // it has since expired, the first annotation request 401s and
+    // `expireSession()` re-opens the panel.
+    // #6: a stored session is a VERIFIED identity and beats an unverified
+    // client-supplied `config.user` — `config.user` is now an anonymous-mode
+    // fallback only. So a stored session is restored EVEN when `config.user`
+    // was supplied (the session user overwrites it, the token attaches), and
+    // supplying `config.user` alongside an active session is deprecated: a
+    // one-time warning fires here. With neither a stored session nor a
+    // `user`, the AuthPanel mounts as before.
+    const stored = loadSession(config.apiUrl, config.pageKey);
+    if (stored) {
+      if (config.user) {
+        this.log.warn(
+          'config.user is deprecated alongside an active session; using the server-derived session identity instead.',
+        );
       }
+      this.config.user = { name: stored.user.name, email: stored.user.email };
+      this.sessionToken = stored.token;
+      this.sessionExpired = false; // a live restored session resets the latch
+    } else if (!config.user) {
+      this.mountAuthPanel();
     }
 
     this.disposables.add(this.bus.on('intent:toggle-mode', () => this.handleToggleMode()));
@@ -544,9 +555,16 @@ export class Widget implements WidgetHandle {
     // Captured into a local so TS keeps the narrowed (non-undefined) type
     // across the `this.store.upsert(...)` and `this.api.create(...)` calls
     // below — narrowing on `this.config.user` (a property) is invalidated
-    // by any method call that TS must assume could reassign it.
+    // by any method call that TS must assume could reassign it. These still
+    // back the OPTIMISTIC row's display attribution regardless of session;
+    // the wire decision (send vs. omit) is `hasSession` below.
     const authorName = this.config.user.name;
     const authorEmail = this.config.user.email;
+    // #6: with an active JWT the server derives authorship from the session
+    // and ignores client-supplied author fields, so they're NOT sent. They
+    // remain the anonymous-mode fallback (embedder-supplied `config.user`,
+    // no session) — the only path that still populates them on the wire.
+    const hasSession = this.sessionToken !== undefined;
     const tempId = createId('local');
     const now = new Date().toISOString();
     const optimistic: Annotation = {
@@ -580,8 +598,11 @@ export class Widget implements WidgetHandle {
           title: payload.title,
           description: payload.description,
           priority: payload.priority,
-          authorName,
-          authorEmail,
+          // Author fields are spread in ONLY for the anonymous-mode fallback
+          // (no session). When `hasSession`, omit them so the server derives
+          // authorship from the JWT — sending them alongside a token is
+          // deprecated and ignored by the server anyway.
+          ...(hasSession ? {} : { authorName, authorEmail }),
         },
         this.abortController.signal,
       );

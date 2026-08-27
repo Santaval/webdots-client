@@ -58,7 +58,7 @@ function createStubApi(): AnnotationAPI {
         description: input.description,
         status: 'OPEN',
         priority: input.priority ?? 'MEDIUM',
-        authorName: input.authorName,
+        authorName: input.authorName ?? 'Anonymous',
         authorEmail: input.authorEmail,
         screenshot: null,
         resolvedAt: null,

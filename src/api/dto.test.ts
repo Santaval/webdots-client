@@ -114,6 +114,29 @@ describe('toCreateBody', () => {
     expect(exactUrl.length).toBe(512);
     expect(() => toCreateBody({ ...validInput, pageUrl: exactUrl })).not.toThrow();
   });
+
+  it('omits authorName/authorEmail from the body when the input carries none (signed-in path, #6)', () => {
+    const input: CreateAnnotationInput = {
+      pageUrl: 'https://example.com/page',
+      selector: 'button',
+      x: 1,
+      y: 2,
+      anchor,
+      title: 'Title',
+    };
+    const body = toCreateBody(input);
+    // Keys must be genuinely absent (not `undefined`-valued) so they never
+    // reach the wire when a JWT session is active — the server derives
+    // authorship from the session instead.
+    expect(body).not.toHaveProperty('authorName');
+    expect(body).not.toHaveProperty('authorEmail');
+  });
+
+  it('includes authorName/authorEmail when supplied (anonymous-mode fallback, #6)', () => {
+    const body = toCreateBody({ ...validInput, authorEmail: 'qa@example.com' });
+    expect(body.authorName).toBe('QA');
+    expect(body.authorEmail).toBe('qa@example.com');
+  });
 });
 
 describe('toUpdateBody', () => {

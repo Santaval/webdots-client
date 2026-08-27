@@ -58,7 +58,7 @@ Only `apiUrl` is required at the type level; `user` is optional — when omitted
 | --- | --- | --- | --- |
 | `apiUrl` | `string` | — | **Required.** Base URL of the annotations API, e.g. `https://api.example.com/api/v1`. Must be an absolute URL. |
 | `apiKey` | `string` | — | **Required for the hosted webdots server** (sent as the `x-api-key` header on every request). Omit only for a stub/demo or a self-hosted backend with `REQUIRE_API_KEY` disabled. See [Authentication](#authentication). |
-| `user` | `{ name: string; email?: string }` | — | Reviewer identity for annotation attribution. **Optional** as of M3: omit it to mount the magic-link sign-in panel (see [Reviewer sign-in](#reviewer-sign-in)), or pass it to skip the panel when the embedder already knows the reviewer. |
+| `user` | `{ name: string; email?: string }` | — | Reviewer identity for annotation attribution. **Optional.** Omit it to mount the magic-link sign-in panel (see [Reviewer sign-in](#reviewer-sign-in)); pass it only to skip the panel when the embedder already knows the reviewer and a session is not used — it is now an **anonymous-mode fallback** (see [Deriving author identity from the session](#deriving-author-identity-from-the-session)). Supplying it alongside an active session is deprecated and logs a warning. |
 | `pageKey` | `string \| (url: URL) => string` | `origin + pathname` | How annotations are scoped to a page. The default drops query string and hash so `?utm_source=…` doesn't create a separate bucket. Resolved **once** at `init()`. |
 | `autoLoad` | `boolean` | `true` | Fetch and render existing annotations on init. |
 | `showResolved` | `boolean` | `false` | Render resolved annotations. When `false`, resolving an annotation removes its pin. |
@@ -215,6 +215,14 @@ const handle = init({
 When a reviewer signs in via the magic-link panel (no `user` passed at `init()`), the session `token` from `POST /auth/magic-link/verify` is attached to **annotation** requests as `Authorization: Bearer <token>` (the auth endpoints themselves never carry it — they exchange a code for the token). The session is persisted in `localStorage`, namespaced by `apiUrl` + `pageKey`, so a page reload restores the reviewer without re-prompting. The stored token is trusted optimistically: if it has expired server-side, the next annotation request returns `401`, the widget clears the session, re-opens the sign-in panel, and rolls back any in-flight optimistic write — no page reload required. This `401`-with-a-session path is distinct from an `x-api-key` `401`: the latter still surfaces via `onError` + toast as described above.
 
 Errors are expected as `{ "message": "…" }`. For `4xx` (other than 401/403) the server's message is surfaced to the user verbatim; for `5xx`, network, and timeout failures, generic copy is shown instead so internal detail is never leaked into the UI. `401`/`403` always render the fixed auth message above, regardless of any server body.
+
+#### Deriving author identity from the session
+
+When a reviewer is signed in (a JWT session is active), annotation **authorship is derived from the session on the server** — the client does **not** send `authorName`/`authorEmail` on the create request. The server resolves the author from the `Bearer` token and returns the resulting `authorName`/`authorEmail` on the response, so the optimistic pin's locally-stamped attribution is reconciled to the server-confirmed identity the moment the create resolves.
+
+`config.user` is retained only as an **anonymous-mode fallback**: an embedder who skips the sign-in panel by passing `user` (and has no stored session) still sends `authorName`/`authorEmail` from that identity. Supplying `config.user` alongside an active session is deprecated — the server-derived session identity takes precedence, `config.user` is ignored, and the widget logs a one-time deprecation warning at `init()`. If you currently pass `user` while relying on magic-link sessions, remove `user` from your `init()` call; the session alone is sufficient.
+
+**Migration (breaking):** `CreateAnnotationInput.authorName` is now optional. Custom `config.api` implementations that previously read a required `authorName` from the create input must tolerate its absence when a session is active — the field is omitted entirely from the request body, not sent as `null`. Existing `init({ user: { name } })` configs without a session keep working unchanged.
 
 ### CORS
 
