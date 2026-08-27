@@ -12,6 +12,13 @@ import { ApiError, AuthError, NetworkError, TimeoutError } from './errors';
  * `HttpAnnotationAPI.request<T>()` so its test suite remains the regression
  * net):
  *  - sends `x-api-key` only when `apiKey` is configured;
+ *  - sends `Authorization: Bearer <token>` only when `getToken` is
+ *    configured AND returns a non-empty token — the JWT session established
+ *    by magic-link sign-in (#5). It's a *getter* (not a static string)
+ *    because the token is established at RUNTIME, after the HTTP API is
+ *    constructed (Widget builds `HttpAnnotationAPI` before sign-in); a getter
+ *    reads the live value at call time. `HttpAuthAPI` never sets it: the auth
+ *    endpoints EXCHANGE a code for a token, they don't CONSUME one;
  *  - sends `Content-Type: application/json` only on bodied requests (a
  *    Content-Type on a bodiless GET/DELETE needlessly forces a CORS
  *    preflight);
@@ -38,6 +45,14 @@ export interface HttpCore {
   apiUrl: string;
   apiKey?: string;
   requestTimeoutMs: number;
+  /**
+   * Returns the CURRENT JWT session token, or `undefined` when no session is
+   * established. A getter (not a static `token` field) so an API constructed
+   * before sign-in picks up the token the moment `finishAuth()` sets it —
+   * see the module doc. Only `HttpAnnotationAPI` wires this; `HttpAuthAPI`
+   * leaves it unset.
+   */
+  getToken?: () => string | undefined;
 }
 
 export interface HttpErrorMapContext {
@@ -71,6 +86,14 @@ export async function httpRequest<T>(
   const headers: Record<string, string> = {};
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   if (core.apiKey) headers['x-api-key'] = core.apiKey;
+  // The JWT session — read fresh per request so a token established after
+  // construction (sign-in completing, or a session restored from localStorage
+  // post-construction) is picked up without rebuilding the API. `Bearer` is
+  // sent only when a token exists, so pre-session requests stay unauthenticated
+  // (the server's public-list / x-api-key path) rather than sending a bare
+  // `Bearer undefined`.
+  const token = core.getToken?.();
+  if (token) headers['Authorization'] = `Bearer ${token}`;
 
   let response: Response;
   try {

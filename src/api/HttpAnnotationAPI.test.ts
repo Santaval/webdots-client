@@ -367,4 +367,115 @@ describe('HttpAnnotationAPI', () => {
       expect(createHeaders['Content-Type']).toBe('application/json');
     });
   });
+
+  describe('JWT session — Bearer header (#5)', () => {
+    /**
+     * The token is established at runtime (after sign-in), so the API is
+     * constructed BEFORE a token exists and reads the live value per request
+     * via a getter. A bare `Bearer undefined` would be worse than no header,
+     * so it must be sent ONLY when the getter returns a value.
+     */
+    it('attaches Authorization: Bearer when getToken returns a token', async () => {
+      const fetchMock = abortableFetchMock(() => mockResponse(200, [wireAnnotation]));
+      vi.stubGlobal('fetch', fetchMock);
+
+      const api = new HttpAnnotationAPI({
+        apiUrl: 'https://api.test/v1',
+        requestTimeoutMs: 5000,
+        getToken: () => 'tok_123',
+      });
+      await api.list({});
+
+      const headers = fetchMock.mock.calls[0]![1]!.headers as Record<string, string>;
+      expect(headers['Authorization']).toBe('Bearer tok_123');
+    });
+
+    it('omits Authorization when getToken returns undefined (pre-session request)', async () => {
+      const fetchMock = abortableFetchMock(() => mockResponse(200, [wireAnnotation]));
+      vi.stubGlobal('fetch', fetchMock);
+
+      const api = new HttpAnnotationAPI({
+        apiUrl: 'https://api.test/v1',
+        requestTimeoutMs: 5000,
+        getToken: () => undefined,
+      });
+      await api.list({});
+
+      const headers = fetchMock.mock.calls[0]![1]!.headers as Record<string, string>;
+      expect(headers['Authorization']).toBeUndefined();
+    });
+
+    it('omits Authorization entirely when no getToken is configured', async () => {
+      const fetchMock = abortableFetchMock(() => mockResponse(200, [wireAnnotation]));
+      vi.stubGlobal('fetch', fetchMock);
+
+      const api = new HttpAnnotationAPI({ apiUrl: 'https://api.test/v1', requestTimeoutMs: 5000 });
+      await api.list({});
+
+      const headers = fetchMock.mock.calls[0]![1]!.headers as Record<string, string>;
+      expect(headers['Authorization']).toBeUndefined();
+    });
+
+    /**
+     * Regression: the token is read fresh per request so a session established
+     * AFTER construction (sign-in completing mid-session) is picked up without
+     * rebuilding the API. A snapshot-at-construction would never see it.
+     */
+    it('reads the token fresh on each request (post-construction sign-in is picked up)', async () => {
+      let currentToken: string | undefined;
+      const fetchMock = abortableFetchMock(() => mockResponse(200, [wireAnnotation]));
+      vi.stubGlobal('fetch', fetchMock);
+
+      const api = new HttpAnnotationAPI({
+        apiUrl: 'https://api.test/v1',
+        requestTimeoutMs: 5000,
+        getToken: () => currentToken,
+      });
+
+      // Pre-session: no Authorization.
+      await api.list({});
+      let headers = fetchMock.mock.calls[0]![1]!.headers as Record<string, string>;
+      expect(headers['Authorization']).toBeUndefined();
+
+      // Sign-in completes between requests — same API instance, now authed.
+      currentToken = 'tok_late';
+      await api.list({});
+      headers = fetchMock.mock.calls[1]![1]!.headers as Record<string, string>;
+      expect(headers['Authorization']).toBe('Bearer tok_late');
+
+      // Session cleared again — header drops, never a stale `Bearer`.
+      currentToken = undefined;
+      await api.list({});
+      headers = fetchMock.mock.calls[2]![1]!.headers as Record<string, string>;
+      expect(headers['Authorization']).toBeUndefined();
+    });
+
+    it('attaches Bearer on bodied requests too (create), alongside x-api-key', async () => {
+      const fetchMock = abortableFetchMock(() =>
+        mockResponse(201, { ...wireAnnotation, id: 'srv_new' }),
+      );
+      vi.stubGlobal('fetch', fetchMock);
+
+      const api = new HttpAnnotationAPI({
+        apiUrl: 'https://api.test/v1',
+        apiKey: 'secret',
+        requestTimeoutMs: 5000,
+        getToken: () => 'tok_123',
+      });
+      const input: CreateAnnotationInput = {
+        pageUrl: 'https://example.com/page',
+        selector: 'button',
+        x: 1,
+        y: 2,
+        anchor,
+        title: 'Title',
+        authorName: 'QA',
+      };
+      await api.create(input);
+
+      const headers = fetchMock.mock.calls[0]![1]!.headers as Record<string, string>;
+      expect(headers['Authorization']).toBe('Bearer tok_123');
+      expect(headers['x-api-key']).toBe('secret');
+    });
+  });
 });
