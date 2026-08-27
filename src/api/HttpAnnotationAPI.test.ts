@@ -128,6 +128,27 @@ describe('HttpAnnotationAPI', () => {
     expect(result.id).toBe('srv_new');
   });
 
+  it('create() omits author fields from the serialized body when the input carries none (signed-in path, #6)', async () => {
+    const fetchMock = abortableFetchMock(() => mockResponse(201, { ...wireAnnotation, id: 'srv_new' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const api = new HttpAnnotationAPI({ apiUrl: 'https://api.test/v1', requestTimeoutMs: 5000 });
+    const input: CreateAnnotationInput = {
+      pageUrl: 'https://example.com/page',
+      selector: 'button',
+      x: 1,
+      y: 2,
+      anchor,
+      title: 'Title',
+    };
+    await api.create(input);
+
+    const [, init] = fetchMock.mock.calls[0]!;
+    const body = JSON.parse(init!.body as string);
+    expect(body).not.toHaveProperty('authorName');
+    expect(body).not.toHaveProperty('authorEmail');
+  });
+
   it('changeStatus() hits the separate /:id/status endpoint with exactly { status }', async () => {
     const fetchMock = abortableFetchMock(() => mockResponse(200, { ...wireAnnotation, status: 'RESOLVED' }));
     vi.stubGlobal('fetch', fetchMock);

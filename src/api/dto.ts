@@ -112,7 +112,14 @@ export interface CreateAnnotationBody {
   title: string;
   description?: string;
   priority?: AnnotationPriority;
-  authorName: string;
+  /**
+   * Anonymous-mode fallback ONLY (#6). When a JWT session is active the
+   * server derives `authorName`/`authorEmail` from the session and ignores
+   * any client-supplied value, so these are OMITTED from the body entirely
+   * (see `toCreateBody`) rather than sent alongside the token. An embedder
+   * who skips the sign-in panel by passing `config.user` still sends them.
+   */
+  authorName?: string;
   authorEmail?: string;
 }
 
@@ -134,6 +141,15 @@ export interface UpdateAnnotationBody {
  * `pageUrl` is also checked against the backend's zod `.url()` validator
  * up front so a bad value 400s here, with a clear message, rather than on
  * the server.
+ *
+ * `authorName`/`authorEmail` are included ONLY when the caller supplies
+ * them — i.e. the anonymous-mode fallback path (an embedder-supplied
+ * `config.user` with no session). When a JWT session is active the caller
+ * omits them so the server derives authorship from the session (#6);
+ * sending them alongside a `Bearer` token is deprecated and ignored by
+ * the server anyway. They're conditionally spread rather than set to
+ * `undefined` so the keys are genuinely absent from the serialized body,
+ * not merely `null`-ish.
  */
 export function toCreateBody(input: CreateAnnotationInput): CreateAnnotationBody {
   assertUrlShape(input.pageUrl, 'pageUrl');
@@ -149,8 +165,9 @@ export function toCreateBody(input: CreateAnnotationInput): CreateAnnotationBody
     title: input.title,
     description: input.description,
     priority: input.priority,
-    authorName: input.authorName,
-    authorEmail: input.authorEmail,
+    ...(input.authorName !== undefined
+      ? { authorName: input.authorName, authorEmail: input.authorEmail }
+      : {}),
   };
 }
 

@@ -18,7 +18,13 @@ export interface CreateAnnotationInput {
   title: string;
   description?: string;
   priority?: AnnotationPriority;
-  authorName: string;
+  /**
+   * Anonymous-mode fallback ONLY (#6): omit these when a JWT session is
+   * active so the server derives authorship from the session. An embedder
+   * who skips the sign-in panel by passing `config.user` supplies them
+   * from that identity.
+   */
+  authorName?: string;
   authorEmail?: string;
 }
 

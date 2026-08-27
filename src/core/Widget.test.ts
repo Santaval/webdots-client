@@ -792,5 +792,109 @@ describe('Widget JWT session (M3, issue #5)', () => {
     expect(onError.mock.calls[0]![0]).toBeInstanceOf(AuthError);
     expect(root.querySelector('.wd-toast__message')).not.toBeNull();
   });
+
+  // ---- #6: derive identity from session; deprecate config.user -----------
+
+  it('with an active session, create() omits authorName/authorEmail so the server derives them from the JWT (#6)', async () => {
+    saveSession(API_URL, pageKey(), storedSession);
+    const api = makeStubApi([]); // list resolves [] so autoLoad succeeds
+    api.create.mockResolvedValueOnce({ ...makeAnnotation({ id: 'srv_new' }), authorName: 'Ada', authorEmail: 'ada@example.com' });
+    const { handle, root } = await mount(api, { user: undefined });
+
+    // Restored session is live: autoLoad ran, panel never mounted.
+    expect(api.list).toHaveBeenCalledTimes(1);
+    expect(root.querySelector('.wd-auth')).toBeNull();
+
+    handle.setMode('annotate');
+    const target = document.createElement('button');
+    document.body.appendChild(target);
+    target.dispatchEvent(new MouseEvent('click', { bubbles: true, composed: true, clientX: 5, clientY: 5 }));
+
+    const titleInput = root.querySelector('[aria-label="Annotation title"]') as HTMLInputElement;
+    titleInput.value = 'New issue';
+    const form = root.querySelector('.wd-form') as HTMLFormElement;
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await flush();
+
+    // The create input must NOT carry author fields — the server derives
+    // authorship from the session token, not the client. (create is called
+    // as create(input, signal), so the AbortSignal is matched too — otherwise
+    // a single-matcher toHaveBeenCalledWith arity-mismatches and the negation
+    // would pass vacuously.)
+    expect(api.create).not.toHaveBeenCalledWith(
+      expect.objectContaining({ authorName: expect.anything() }),
+      expect.anything(),
+    );
+    expect(api.create).not.toHaveBeenCalledWith(
+      expect.objectContaining({ authorEmail: expect.anything() }),
+      expect.anything(),
+    );
+    target.remove();
+  });
+
+  it('without a session (embedder-supplied user), create() still sends authorName as the anonymous fallback (#6)', async () => {
+    const api = makeStubApi([]);
+    api.create.mockResolvedValueOnce(makeAnnotation({ id: 'srv_new' }));
+    const { handle, root } = await mount(api); // default mount supplies user — no session, no panel
+
+    expect(root.querySelector('.wd-auth')).toBeNull(); // never authed
+
+    handle.setMode('annotate');
+    const target = document.createElement('button');
+    document.body.appendChild(target);
+    target.dispatchEvent(new MouseEvent('click', { bubbles: true, composed: true, clientX: 5, clientY: 5 }));
+
+    const titleInput = root.querySelector('[aria-label="Annotation title"]') as HTMLInputElement;
+    titleInput.value = 'New issue';
+    const form = root.querySelector('.wd-form') as HTMLFormElement;
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await flush();
+
+    expect(api.create).toHaveBeenCalledWith(expect.objectContaining({ authorName: 'QA Tester' }), expect.anything());
+    target.remove();
+  });
+
+  it('a supplied config.user alongside a stored session is deprecated: the session identity wins and a warning is logged (#6)', async () => {
+    saveSession(API_URL, pageKey(), storedSession);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const api = makeStubApi([]); // list resolves [] so autoLoad succeeds
+    api.create.mockResolvedValueOnce(makeAnnotation({ id: 'srv_new' }));
+    const { handle, root } = await mount(api, { user: { name: 'Embedder' }, debug: true });
+
+    // The verified session beats the unverified client identity: the panel
+    // never mounts, annotate is un-gated, and autoLoad ran against the
+    // restored session.
+    expect(root.querySelector('.wd-auth')).toBeNull();
+    handle.setMode('annotate');
+    expect(handle.getMode()).toBe('annotate');
+    expect(api.list).toHaveBeenCalledTimes(1);
+
+    // A one-time deprecation warning was logged at init.
+    const warned = warnSpy.mock.calls.find((c) => /deprecated/.test(String(c[1])));
+    expect(warned).toBeTruthy();
+
+    // The session identity (not the supplied 'Embedder') backs the
+    // optimistic pin: the stored session's user is 'Ada', so the local
+    // row is stamped with that name before the server confirms.
+    const target = document.createElement('button');
+    document.body.appendChild(target);
+    target.dispatchEvent(new MouseEvent('click', { bubbles: true, composed: true, clientX: 5, clientY: 5 }));
+    const titleInput = root.querySelector('[aria-label="Annotation title"]') as HTMLInputElement;
+    titleInput.value = 'New issue';
+    const form = root.querySelector('.wd-form') as HTMLFormElement;
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+
+    const optimistic = handle.getAnnotations().find((a) => a.id.startsWith('local_'));
+    expect(optimistic?.authorName).toBe('Ada'); // session user, not 'Embedder'
+
+    await flush();
+    // The session is active, so the create input also omits author fields.
+    expect(api.create).not.toHaveBeenCalledWith(
+      expect.objectContaining({ authorName: expect.anything() }),
+      expect.anything(),
+    );
+    target.remove();
+    warnSpy.mockRestore();
+  });
 });
 
