@@ -6,6 +6,8 @@ import type { AuthAPI, MagicLinkSession } from '../api/AuthAPI';
 import type { Annotation, AnnotationStatus } from './types';
 import type { AnchorDescriptor } from '../anchor/types';
 import type { WebdotsConfig } from './config';
+import { resolvePageKey } from '../utils/pageKey';
+import { loadSession, saveSession } from '../utils/sessionStore';
 
 function makeAnnotation(overrides: Partial<Annotation> = {}): Annotation {
   return {
@@ -510,6 +512,7 @@ describe('Widget reviewer auth — magic link (M3, issue #4)', () => {
   afterEach(() => {
     destroy();
     document.body.innerHTML = '';
+    localStorage.clear(); // #5: finishAuth now persists the session; keep tests isolated
     vi.restoreAllMocks();
   });
 
@@ -616,6 +619,178 @@ describe('Widget reviewer auth — magic link (M3, issue #4)', () => {
     // Annotate remains gated (no user was established).
     handle.setMode('annotate');
     expect(handle.getMode()).toBe('idle');
+  });
+});
+
+describe('Widget JWT session (M3, issue #5)', () => {
+  const API_URL = 'https://api.example.com/api/v1';
+
+  /**
+   * The pageKey Widget resolves at init — `resolveConfig` calls
+   * `resolvePageKey(new URL(location.href))`. The test must seed localStorage
+   * with the SAME key the Widget will read, so derive it the same way rather
+   * than hard-coding a URL that could drift from jsdom's location.
+   */
+  function pageKey(): string {
+    return resolvePageKey(new URL(location.href));
+  }
+
+  const storedSession: MagicLinkSession = {
+    token: 'tok_live',
+    user: { name: 'Ada', email: 'ada@example.com' },
+  };
+
+  function fillAuthEmail(root: ShadowRoot, email: string): void {
+    (root.querySelector('[aria-label="Email address"]') as HTMLInputElement).value = email;
+  }
+  function submitAuthEmail(root: ShadowRoot): void {
+    (root.querySelector('.wd-auth__form') as HTMLFormElement).dispatchEvent(
+      new Event('submit', { bubbles: true, cancelable: true }),
+    );
+  }
+  function fillAuthCode(root: ShadowRoot, code: string): void {
+    (root.querySelector('[aria-label="Sign-in code"]') as HTMLInputElement).value = code;
+  }
+  function submitAuthCode(root: ShadowRoot): void {
+    const forms = root.querySelectorAll('.wd-auth__form');
+    (forms[forms.length - 1] as HTMLFormElement).dispatchEvent(
+      new Event('submit', { bubbles: true, cancelable: true }),
+    );
+  }
+
+  afterEach(() => {
+    destroy();
+    document.body.innerHTML = '';
+    localStorage.clear();
+    vi.restoreAllMocks();
+  });
+
+  // Acceptance: "Token survives reload."
+  it('a stored session restores without re-prompting, enables annotate, and runs autoLoad', async () => {
+    saveSession(API_URL, pageKey(), storedSession);
+    const api = makeStubApi([makeAnnotation()]);
+    const { handle, root } = await mount(api, { user: undefined });
+
+    // No AuthPanel — the restored session re-established the reviewer.
+    expect(root.querySelector('.wd-auth')).toBeNull();
+    // Annotate is un-gated (attribution identity restored).
+    handle.setMode('annotate');
+    expect(handle.getMode()).toBe('annotate');
+    // The restored session's first request is the deferred autoLoad.
+    expect(api.list).toHaveBeenCalledTimes(1);
+  });
+
+  it('finishAuth persists the session to localStorage so it survives a reload', async () => {
+    const api = makeStubApi();
+    const authApi = makeStubAuthApi(storedSession);
+    const { root } = await mount(api, { user: undefined, authApi });
+
+    expect(loadSession(API_URL, pageKey())).toBeNull(); // nothing persisted yet
+
+    fillAuthEmail(root, 'ada@example.com');
+    submitAuthEmail(root);
+    await flush();
+    fillAuthCode(root, 'ABC123');
+    submitAuthCode(root);
+    await flush();
+
+    // The session is now persisted under the apiUrl+pageKey namespace.
+    expect(loadSession(API_URL, pageKey())).toEqual(storedSession);
+  });
+
+  // Acceptance: "expiry re-prompts without a page reload."
+  it('a token-present 401 on autoLoad clears the session, re-opens the AuthPanel, and re-gates annotate (no toast)', async () => {
+    saveSession(API_URL, pageKey(), storedSession);
+    const api = makeStubApi();
+    api.list.mockRejectedValue(new AuthError(401, `${API_URL}/annotations`)); // every list 401s
+    const onError = vi.fn();
+    const { handle, root } = await mount(api, { user: undefined, onError });
+
+    // The panel re-mounted — autoLoad's 401 expired the restored session.
+    expect(root.querySelector('.wd-auth')).not.toBeNull();
+    // Annotate re-gated (config.user revoked).
+    handle.setMode('annotate');
+    expect(handle.getMode()).toBe('idle');
+    // The persisted session was cleared.
+    expect(loadSession(API_URL, pageKey())).toBeNull();
+    // No error toast / onError — the re-opened panel IS the user-facing signal.
+    expect(root.querySelector('.wd-toast__message')).toBeNull();
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it('a token-present 401 on a create rolls back the optimistic pin and re-opens the panel (drop + rollback, no toast)', async () => {
+    saveSession(API_URL, pageKey(), storedSession);
+    const api = makeStubApi([]); // list resolves [] so autoLoad succeeds
+    api.create.mockRejectedValueOnce(new AuthError(401, `${API_URL}/annotations`));
+    const onError = vi.fn();
+    const { handle, root } = await mount(api, { user: undefined, onError });
+
+    // Restored session is live: autoLoad ran and the panel never mounted.
+    expect(api.list).toHaveBeenCalledTimes(1);
+    expect(root.querySelector('.wd-auth')).toBeNull();
+
+    handle.setMode('annotate');
+    const target = document.createElement('button');
+    document.body.appendChild(target);
+    target.dispatchEvent(new MouseEvent('click', { bubbles: true, composed: true, clientX: 5, clientY: 5 }));
+
+    const titleInput = root.querySelector('[aria-label="Annotation title"]') as HTMLInputElement;
+    titleInput.value = 'New issue';
+    const form = root.querySelector('.wd-form') as HTMLFormElement;
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await flush();
+
+    // The optimistic pin was dropped (drop + rollback).
+    expect(handle.getAnnotations()).toHaveLength(0);
+    // The panel re-opened — the session expired.
+    expect(root.querySelector('.wd-auth')).not.toBeNull();
+    // Annotate re-gated.
+    expect(handle.getMode()).toBe('idle');
+    // Persisted session cleared.
+    expect(loadSession(API_URL, pageKey())).toBeNull();
+    // No toast, no onError — the panel is the signal, not a generic error.
+    expect(root.querySelector('.wd-toast__message')).toBeNull();
+    expect(onError).not.toHaveBeenCalled();
+    target.remove();
+  });
+
+  it('idempotency: a second 401 after expiry does not re-mount the panel or surface a misleading toast', async () => {
+    saveSession(API_URL, pageKey(), storedSession);
+    const api = makeStubApi();
+    api.list.mockRejectedValue(new AuthError(401, `${API_URL}/annotations`)); // every list 401s
+    const onError = vi.fn();
+    const { handle, root } = await mount(api, { user: undefined, onError });
+
+    // The first 401 (autoLoad) expired the session and re-mounted the panel.
+    expect(root.querySelector('.wd-auth')).not.toBeNull();
+
+    // A later 401 (refresh) lands AFTER expiry — must collapse to a silent no-op.
+    await handle.refresh();
+    await flush();
+
+    // Still exactly ONE panel — no duplicate re-mount.
+    expect(root.querySelectorAll('.wd-auth')).toHaveLength(1);
+    // No misleading "API key invalid" toast for the concurrent post-expiry 401.
+    expect(root.querySelector('.wd-toast__message')).toBeNull();
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Guard: the new token-present 401 branch must NOT change the no-token path.
+   * An embedder-supplied reviewer (skips the panel, no session) whose apiKey
+   * is rejected gets the existing AuthError -> onError + toast behavior, not a
+   * phantom re-prompt.
+   */
+  it('a no-token 401 (x-api-key failure, never authed) still surfaces via onError + toast, not the panel', async () => {
+    const api = makeStubApi();
+    api.list.mockRejectedValueOnce(new AuthError(401, `${API_URL}/annotations`));
+    const onError = vi.fn();
+    const { root } = await mount(api, { onError }); // default mount supplies user — skips the panel
+
+    expect(root.querySelector('.wd-auth')).toBeNull(); // never mounted
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError.mock.calls[0]![0]).toBeInstanceOf(AuthError);
+    expect(root.querySelector('.wd-toast__message')).not.toBeNull();
   });
 });
 

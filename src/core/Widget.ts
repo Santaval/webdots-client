@@ -10,7 +10,7 @@ import type { AnnotationAPI, UpdateAnnotationInput } from '../api/AnnotationAPI'
 import type { AuthAPI, MagicLinkSession } from '../api/AuthAPI';
 import { HttpAnnotationAPI } from '../api/HttpAnnotationAPI';
 import { HttpAuthAPI } from '../api/HttpAuthAPI';
-import { ExpiredCodeError } from '../api/errors';
+import { AuthError, ExpiredCodeError } from '../api/errors';
 import { ShadowHost } from '../ui/ShadowHost';
 import { Toolbar } from '../ui/Toolbar';
 import { Overlay } from '../ui/Overlay';
@@ -23,6 +23,7 @@ import { AuthPanel } from '../ui/AuthPanel';
 import { Disposables } from '../utils/Disposables';
 import { createLogger } from '../utils/log';
 import { createId } from '../utils/id';
+import { clearSession, loadSession, saveSession } from '../utils/sessionStore';
 
 interface PendingCreate {
   anchor: AnchorDescriptor;
@@ -118,8 +119,28 @@ export class Widget implements WidgetHandle {
   // un-gated. `lastAuthEmail` backs the "Resend" intent (re-request a link
   // for the email the reviewer already entered) without the panel having to
   // hold that state itself.
+  //
+  // #5 (JWT session): the live token lives in `sessionToken`, read by the
+  // default `HttpAnnotationAPI`'s `getToken` so annotation requests carry
+  // `Authorization: Bearer`. On reload a stored session is restored from
+  // localStorage (no re-prompt) until the next request 401s, at which point
+  // `expireSession()` clears the token + storage, revokes `config.user`, and
+  // re-mounts the panel — the "expiry re-prompts without a page reload" path.
+  // A token-present 401 is therefore distinct from a no-token 401 (the
+  // latter is an x-api-key failure surfaced via the normal error channel).
   private authPanel: AuthPanel | null = null;
   private lastAuthEmail = '';
+  private sessionToken: string | undefined;
+  /**
+   * Latches `true` the moment `expireSession()` runs, so a flurry of CONCURRENT
+   * in-flight operations that all 401 (token expired → every pending request
+   * gets the same 401) produces a SINGLE re-prompt transition and silent
+   * rollbacks for the rest — not N panel re-mounts, and not a misleading
+   * "API key invalid" Toast for the requests whose 401 arrived a microtask
+   * after the first one already cleared `sessionToken`. Reset to `false` by
+   * `finishAuth()` / session-restore when a fresh session is established.
+   */
+  private sessionExpired = false;
 
   constructor(config: ResolvedWebdotsConfig, version: string) {
     this.version = version;
@@ -135,6 +156,11 @@ export class Widget implements WidgetHandle {
         apiUrl: config.apiUrl,
         apiKey: config.apiKey,
         requestTimeoutMs: config.requestTimeoutMs,
+        // Live token — read at request time so sign-in completing (or a
+        // session restored from localStorage below) is picked up without
+        // rebuilding the API. A custom `config.api` override handles its
+        // own auth and never receives the token through this path.
+        getToken: () => this.sessionToken,
       });
 
     // Auth API is instantiated unconditionally (it's a plain object — no
@@ -186,12 +212,20 @@ export class Widget implements WidgetHandle {
     // M3: reviewer magic-link sign-in. Mounted only when no `user` was
     // supplied at init — the panel is the runtime path to ESTABLISHING that
     // user. An embedder who passes `user` skips the panel entirely.
+    // #5: when no `user` was supplied, a session persisted from a PRIOR
+    // sign-in (namespaced by apiUrl + pageKey) is restored — the token
+    // survives reload and annotate stays un-gated, no re-prompt. The stored
+    // token is trusted optimistically; if it has since expired, the first
+    // annotation request 401s and `expireSession()` re-opens the panel.
     if (!config.user) {
-      this.authPanel = new AuthPanel({ bus: this.bus });
-      this.shadowHost.shadowRoot.appendChild(this.authPanel.el);
-      this.disposables.add(() => this.authPanel?.dispose());
-      this.bus.emit('state:auth-state-changed', { phase: 'email' });
-      this.authPanel.focus();
+      const stored = loadSession(config.apiUrl, config.pageKey);
+      if (stored) {
+        this.config.user = { name: stored.user.name, email: stored.user.email };
+        this.sessionToken = stored.token;
+        this.sessionExpired = false; // a live restored session resets the latch
+      } else {
+        this.mountAuthPanel();
+      }
     }
 
     this.disposables.add(this.bus.on('intent:toggle-mode', () => this.handleToggleMode()));
@@ -241,9 +275,12 @@ export class Widget implements WidgetHandle {
     // for the transient optimistic `local_...` row and double-invoke it.
 
     // autoLoad is deferred until AFTER the reviewer signs in when no `user`
-    // was supplied at init — there's no attribution identity (and no
-    // session) to load against until the magic-link flow completes. An
-    // embedder who passes `user` loads immediately, as before.
+    // was supplied at init AND no session was restored from localStorage —
+    // there's no attribution identity (and no session) to load against until
+    // the magic-link flow completes. A restored session (#5) or an
+    // embedder-supplied `user` loads immediately. The restore case trusts the
+    // stored token optimistically; if it has expired, this first fetch 401s
+    // and `expireSession()` re-opens the panel (no page reload).
     if (config.autoLoad && config.user) {
       void this.loadAnnotations();
     }
@@ -265,6 +302,14 @@ export class Widget implements WidgetHandle {
       this.store.replaceAll(list);
     } catch (err) {
       if (this.abortController.signal.aborted) return;
+      if (err instanceof AuthError && (this.sessionToken || this.sessionExpired)) {
+        // The autoLoad/refresh fetch was carrying a JWT that the server just
+        // rejected — a session expiry, not a config error. Re-prompt rather
+        // than Toast (the panel IS the user-facing signal). The Store wasn't
+        // mutated yet, so there's nothing to roll back here.
+        this.expireSession();
+        return;
+      }
       this.reportError(toError(err));
     }
   }
@@ -278,6 +323,22 @@ export class Widget implements WidgetHandle {
 
   private hasUser(): boolean {
     return this.config.user !== undefined;
+  }
+
+  /**
+   * Mounts a fresh AuthPanel into the shadow root at the `email` phase. Shared
+   * by the constructor (no `user` and no stored session) and by
+   * `expireSession()` (a previously-established session just lapsed). The
+   * panel's own dispose is registered on `disposables`; re-mounting after
+   * expiry is safe because `expireSession()` nulls `authPanel` (and its old
+   * disposable has already run) before calling here.
+   */
+  private mountAuthPanel(): void {
+    this.authPanel = new AuthPanel({ bus: this.bus });
+    this.shadowHost.shadowRoot.appendChild(this.authPanel.el);
+    this.disposables.add(() => this.authPanel?.dispose());
+    this.bus.emit('state:auth-state-changed', { phase: 'email' });
+    this.authPanel.focus();
   }
 
   private async handleRequestMagicLink(email: string): Promise<void> {
@@ -327,18 +388,51 @@ export class Widget implements WidgetHandle {
    * Writes the server-confirmed identity back into `config.user`, unmounts
    * the AuthPanel, un-gates annotate mode, and — when `autoLoad` was on —
    * performs the deferred initial annotation fetch now that attribution is
-   * possible. The session `token` is established here but NOT yet attached
-   * to annotation requests; wiring it into the annotations transport is
-   * issue #5's scope (this milestone only establishes the session).
+   * possible. #5 also holds the session token live in `sessionToken` (read
+   * by the annotations transport's `getToken`) and persists it to
+   * localStorage so the session survives a reload.
    */
   private finishAuth(session: MagicLinkSession): void {
     this.config.user = { name: session.user.name, email: session.user.email };
+    this.sessionToken = session.token;
+    this.sessionExpired = false; // a fresh session supersedes any prior expiry latch
+    saveSession(this.config.apiUrl, this.config.pageKey, session);
     this.authPanel?.dispose();
     this.authPanel = null;
     if (this.config.autoLoad) {
       void this.loadAnnotations();
     }
     this.log.debug('reviewer authenticated');
+  }
+
+  /**
+   * Tears down an established session after a token-present 401 (the JWT has
+   * expired server-side). Clears the live token + the persisted session,
+   * revokes `config.user` so annotate mode re-gates, closes any open
+   * composer/detail surface, snaps mode back to `idle`, and re-opens the
+   * AuthPanel — the "expiry re-prompts without a page reload" path.
+   *
+   * IDEMPOTENT: the `if (this.sessionExpired) return` guard means N concurrent
+   * in-flight operations that all 401 produce a SINGLE transition — the first
+   * flips the session off and re-mounts the panel; the rest short-circuit
+   * here. Each caller still rolls its own optimistic mutation back BEFORE
+   * calling this (see the per-op catch blocks), so pending writes resolve
+   * deterministically (drop + rollback, per #5's chosen strategy) rather than
+   * half-applying. The latch is reset only when a NEW session is established
+   * (`finishAuth()` / reload-restore).
+   */
+  private expireSession(): void {
+    if (this.sessionExpired) return; // concurrent 401s collapse to one transition
+    this.sessionExpired = true;
+    this.sessionToken = undefined;
+    clearSession(this.config.apiUrl, this.config.pageKey);
+    this.config.user = undefined;
+    // Close any surfaces that presume an authed reviewer, then re-gate mode.
+    this.closeComposerUi();
+    this.closeDetailUi();
+    this.setMode('idle');
+    this.mountAuthPanel();
+    this.log.info('session expired; re-opening sign-in');
   }
 
   private handleToggleMode(): void {
@@ -497,6 +591,10 @@ export class Widget implements WidgetHandle {
     } catch (err) {
       if (this.abortController.signal.aborted) return; // destroy() already tore everything down
       this.store.remove(tempId);
+      if (err instanceof AuthError && (this.sessionToken || this.sessionExpired)) {
+        this.expireSession(); // JWT expired — drop the optimistic pin and re-prompt
+        return;
+      }
       this.reportError(toError(err));
     }
   }
@@ -614,6 +712,10 @@ export class Widget implements WidgetHandle {
     } catch (err) {
       if (this.abortController.signal.aborted) return;
       this.store.upsert(previous); // roll back to the EXACT previous annotation, not a partial revert
+      if (err instanceof AuthError && (this.sessionToken || this.sessionExpired)) {
+        this.expireSession(); // JWT expired — roll the edit back and re-prompt
+        return;
+      }
       this.reportError(toError(err));
     }
   }
@@ -656,6 +758,10 @@ export class Widget implements WidgetHandle {
     } catch (err) {
       if (this.abortController.signal.aborted) return;
       this.store.upsert(previous); // restores it — including re-showing it if it had been optimistically hidden
+      if (err instanceof AuthError && (this.sessionToken || this.sessionExpired)) {
+        this.expireSession(); // JWT expired — roll the status change back and re-prompt
+        return;
+      }
       this.reportError(toError(err));
     }
   }
@@ -681,6 +787,10 @@ export class Widget implements WidgetHandle {
     } catch (err) {
       if (this.abortController.signal.aborted) return;
       this.store.upsert(previous); // restore on failure — card stays closed; the pin simply reappears
+      if (err instanceof AuthError && (this.sessionToken || this.sessionExpired)) {
+        this.expireSession(); // JWT expired — undo the delete and re-prompt
+        return;
+      }
       this.reportError(toError(err));
     }
   }

@@ -7,6 +7,14 @@ export interface HttpAnnotationAPIOptions {
   apiUrl: string;
   apiKey?: string;
   requestTimeoutMs: number;
+  /**
+   * Supplies the live JWT session token for `Authorization: Bearer` (#5).
+   * A getter so the token established at runtime (post sign-in, or restored
+   * from localStorage on reload) is read at request time without rebuilding
+   * the API. Omitted entirely on `HttpAuthAPI` — the auth endpoints exchange
+   * a code for a token, they don't consume one.
+   */
+  getToken?: () => string | undefined;
 }
 
 /**
@@ -15,7 +23,9 @@ export interface HttpAnnotationAPIOptions {
  * no HTTP client library. The transport plumbing (timeout/abort
  * composition, header hygiene, 401/403 -> AuthError, 204 handling) lives in
  * the shared `api/http.ts` core; this module owns only the annotation
- * wire-format mapping (`dto.ts`) and the per-method URL/body shaping.
+ * wire-format mapping (`dto.ts`) and the per-method URL/body shaping. The
+ * JWT `getToken` is threaded straight through to `HttpCore` so the shared
+ * transport attaches `Authorization: Bearer` — see `http.ts`'s module doc.
  */
 export class HttpAnnotationAPI implements AnnotationAPI {
   private readonly core: HttpCore;
@@ -25,6 +35,7 @@ export class HttpAnnotationAPI implements AnnotationAPI {
       apiUrl: options.apiUrl,
       apiKey: options.apiKey,
       requestTimeoutMs: options.requestTimeoutMs,
+      getToken: options.getToken,
     };
   }
 
