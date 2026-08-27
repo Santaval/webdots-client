@@ -58,6 +58,28 @@ function setup() {
   return { bus, store, overlay, pinManager };
 }
 
+/** Mirrors `api/dto.ts`'s coords fallback: a legacy row with no anchor data. */
+function coordsAnchor(selector: string): AnchorDescriptor {
+  return {
+    v: 1,
+    strategy: 'coords',
+    selector,
+    path: selector,
+    ratio: { x: 0.5, y: 0.5 },
+    viewportW: 0,
+    tag: '',
+  };
+}
+
+function setupWithUpgrade(onAnchorUpgrade: (id: string, anchor: AnchorDescriptor) => void) {
+  const bus = new EventBus();
+  const store = new Store(bus);
+  const overlay = new Overlay({ bus });
+  document.body.appendChild(overlay.el);
+  const pinManager = new PinManager({ bus, store, overlay, onAnchorUpgrade });
+  return { bus, store, overlay, pinManager };
+}
+
 describe('PinManager confidence-based pin treatment', () => {
   afterEach(() => {
     document.body.innerHTML = '';
@@ -293,5 +315,84 @@ describe('PinManager teardown', () => {
     // rendered confidence) is exactly as it was at dispose time.
     expect(overlay.getPin('a1')!.el.dataset.wdConfidence).toBe('exact');
     document.body.innerHTML = '';
+  });
+});
+
+describe('PinManager anchor self-healing (issue #7)', () => {
+  afterEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  /**
+   * PinManager only DETECTS the upgrade and hands it off; the dedup/debounce
+   * lives in the Widget's AnchorUpgrader. So these tests assert the callback
+   * fires on a genuine re-resolve — and, crucially, does NOT re-fire while the
+   * cached element stays connected (the storm-prevention guard).
+   */
+  it('fires onAnchorUpgrade with a regenerated testid anchor when a coords fallback re-resolves to a live element', () => {
+    const button = document.createElement('button');
+    button.setAttribute('data-testid', 'cta');
+    document.body.appendChild(button);
+    vi.spyOn(button, 'getBoundingClientRect').mockReturnValue({
+      left: 100, top: 200, width: 40, height: 20,
+      right: 140, bottom: 220, x: 100, y: 200, toJSON() {},
+    });
+
+    const handler = vi.fn();
+    const { store, pinManager } = setupWithUpgrade(handler);
+    // The coords fallback's selector happens to still match — the common
+    // legacy-row case where the old selector is still valid.
+    store.upsert(makeAnnotation({ anchor: coordsAnchor('[data-testid="cta"]'), x: 110, y: 210 }));
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    const [id, upgraded] = handler.mock.calls[0]!;
+    expect(id).toBe('a1');
+    expect(upgraded.strategy).toBe('testid');
+    expect(upgraded.selector).toBe('[data-testid="cta"]');
+    expect(upgraded.ratio).toEqual({ x: 0.25, y: 0.5 });
+    pinManager.dispose();
+  });
+
+  it('does NOT fire for an already selector-based anchor (it tracks already)', () => {
+    const button = document.createElement('button');
+    button.setAttribute('data-testid', 'cta');
+    document.body.appendChild(button);
+
+    const handler = vi.fn();
+    const { store, pinManager } = setupWithUpgrade(handler);
+    store.upsert(makeAnnotation({ anchor: anchorFor(button), x: 0, y: 0 }));
+
+    expect(handler).not.toHaveBeenCalled();
+    pinManager.dispose();
+  });
+
+  it('does NOT fire when nothing resolved (orphaned coords anchor)', () => {
+    const restore = stubScrollHeight(5000);
+    const handler = vi.fn();
+    const { store, pinManager } = setupWithUpgrade(handler);
+    store.upsert(makeAnnotation({ anchor: coordsAnchor('[data-testid="missing"]'), x: 10, y: 10 }));
+
+    expect(handler).not.toHaveBeenCalled();
+    pinManager.dispose();
+    restore();
+  });
+
+  it('does NOT re-fire on a cached layout tick (storm prevention) — only on a real re-resolve', async () => {
+    const button = document.createElement('button');
+    button.setAttribute('data-testid', 'cta');
+    document.body.appendChild(button);
+
+    const handler = vi.fn();
+    const { store, pinManager } = setupWithUpgrade(handler);
+    store.upsert(makeAnnotation({ anchor: coordsAnchor('[data-testid="cta"]'), x: 0, y: 0 }));
+    expect(handler).toHaveBeenCalledTimes(1);
+
+    // The cached element is still connected, so a layout tick reuses it
+    // without re-resolving — no second upgrade signal.
+    window.dispatchEvent(new Event('resize'));
+    await tick();
+    expect(handler).toHaveBeenCalledTimes(1);
+
+    pinManager.dispose();
   });
 });

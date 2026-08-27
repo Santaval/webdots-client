@@ -24,6 +24,7 @@ import { Disposables } from '../utils/Disposables';
 import { createLogger } from '../utils/log';
 import { createId } from '../utils/id';
 import { clearSession, loadSession, saveSession } from '../utils/sessionStore';
+import { AnchorUpgrader } from './AnchorUpgrader';
 
 interface PendingCreate {
   anchor: AnchorDescriptor;
@@ -83,6 +84,7 @@ export class Widget implements WidgetHandle {
   private store: Store;
   private overlay: Overlay;
   private pinManager: PinManager;
+  private anchorUpgrader: AnchorUpgrader;
   private highlighter: Highlighter;
   private api: AnnotationAPI;
   private authApi: AuthAPI;
@@ -187,8 +189,43 @@ export class Widget implements WidgetHandle {
     this.shadowHost.shadowRoot.appendChild(this.overlay.el);
     this.disposables.add(() => this.overlay.dispose());
 
-    this.pinManager = new PinManager({ bus: this.bus, store: this.store, overlay: this.overlay });
+    // Issue #7 self-healing write-back: PinManager detects when a `coords`
+    // fallback anchor (a legacy row with no `anchor` column data) re-resolves
+    // to a live element and regenerates a real selector anchor; the upgrader
+    // debounces those signals into PATCHed writes and prevents the write loop
+    // a no-column server would otherwise cause (it re-synthesizes `coords` on
+    // load, PinManager re-detects, forever). Constructed before PinManager so
+    // its `schedule` callback can be handed in as `onAnchorUpgrade`.
+    this.anchorUpgrader = new AnchorUpgrader({
+      patch: async (id, anchor, signal) => {
+        try {
+          return await this.api.update(id, { anchor }, signal);
+        } catch (err) {
+          if (err instanceof AuthError && (this.sessionToken || this.sessionExpired)) {
+            this.expireSession();
+          }
+          throw err;
+        }
+      },
+      // Only upsert the server-confirmed row if it still exists — a delete
+      // may have landed while the PATCH was in flight, and re-adding it would
+      // resurrect a pin the user just removed.
+      onApplied: (annotation) => {
+        if (this.store.get(annotation.id)) this.store.upsert(annotation);
+      },
+      signal: this.abortController.signal,
+      isLiveId: (id) => !id.startsWith('local_'),
+    });
+
+    this.pinManager = new PinManager({
+      bus: this.bus,
+      store: this.store,
+      overlay: this.overlay,
+      onAnchorUpgrade: (id, anchor) => this.anchorUpgrader.schedule(id, anchor),
+      testIdAttributes: this.config.testIdAttributes,
+    });
     this.disposables.add(() => this.pinManager.dispose());
+    this.disposables.add(() => this.anchorUpgrader.dispose());
 
     this.highlighter = new Highlighter({
       bus: this.bus,
