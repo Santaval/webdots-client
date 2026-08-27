@@ -898,3 +898,99 @@ describe('Widget JWT session (M3, issue #5)', () => {
   });
 });
 
+describe('Widget anchor self-healing (issue #7)', () => {
+  afterEach(() => {
+    destroy();
+    document.body.innerHTML = '';
+    vi.restoreAllMocks();
+  });
+
+  /**
+   * The debounce window (AnchorUpgrader defaults to 1500ms). The self-heal
+   * PATCH fires after this elapses; tests await past it before asserting.
+   */
+  const DEBOUNCE = 1700;
+
+  /** Mirrors `api/dto.ts`'s coords fallback for a legacy row with no anchor column data. */
+  function coordsFallback(selector: string): AnchorDescriptor {
+    return {
+      v: 1,
+      strategy: 'coords',
+      selector,
+      path: selector,
+      ratio: { x: 0.5, y: 0.5 },
+      viewportW: 0,
+      tag: '',
+    };
+  }
+
+  it('round-trip: a coords-fallback annotation that re-resolves gets PATCHed with an upgraded testid anchor, and the Store adopts it', async () => {
+    const cta = document.createElement('button');
+    cta.setAttribute('data-testid', 'cta');
+    document.body.appendChild(cta);
+
+    const api = makeStubApi([makeAnnotation({ id: 'srv_1', anchor: coordsFallback('[data-testid="cta"]') })]);
+    const { handle } = await mount(api);
+    await flush();
+    await new Promise((resolve) => setTimeout(resolve, DEBOUNCE));
+
+    // Acceptance: after the debounce, exactly one PATCH carrying the upgraded
+    // selector-strategy anchor.
+    expect(api.update).toHaveBeenCalledTimes(1);
+    const [id, patch] = api.update.mock.calls[0]!;
+    expect(id).toBe('srv_1');
+    expect(patch.anchor?.strategy).toBe('testid');
+    expect(patch.anchor?.selector).toBe('[data-testid="cta"]');
+
+    // The server-confirmed upgraded anchor is now the source of truth in the Store.
+    expect(handle.getAnnotations()[0]!.anchor?.strategy).toBe('testid');
+  });
+
+  it('no-column fallback: a server that drops the anchor field does not loop — one PATCH, coords preserved', async () => {
+    const cta = document.createElement('button');
+    cta.setAttribute('data-testid', 'cta');
+    document.body.appendChild(cta);
+
+    const coords = coordsFallback('[data-testid="cta"]');
+    const api = makeStubApi([makeAnnotation({ id: 'srv_1', anchor: coords })]);
+    // Simulate a server WITHOUT the `anchor` column: the PATCH is accepted
+    // but the row comes back with no anchor -> dto re-synthesizes `coords`.
+    api.update.mockResolvedValue(makeAnnotation({ id: 'srv_1', anchor: coords }));
+
+    await mount(api);
+    await flush();
+    await new Promise((resolve) => setTimeout(resolve, DEBOUNCE));
+
+    // Loop prevention: exactly one PATCH, despite the Store still holding a
+    // coords anchor that PinManager would otherwise re-detect.
+    expect(api.update).toHaveBeenCalledTimes(1);
+    // The fallback behavior is preserved: the pin stays on its coords anchor.
+    expect(api.update.mock.calls[0]![1].anchor?.strategy).toBe('testid');
+  });
+
+  it('a freshly-created annotation (non-coords anchor) does NOT trigger a self-heal PATCH', async () => {
+    const api = makeStubApi([]);
+    const { handle, root } = await mount(api);
+
+    handle.setMode('annotate');
+    const target = document.createElement('button');
+    target.setAttribute('data-testid', 'new-btn');
+    document.body.appendChild(target);
+    target.dispatchEvent(new MouseEvent('click', { bubbles: true, composed: true, clientX: 5, clientY: 5 }));
+
+    const titleInput = root.querySelector('[aria-label="Annotation title"]') as HTMLInputElement;
+    titleInput.value = 'New issue';
+    (root.querySelector('.wd-form') as HTMLFormElement).dispatchEvent(
+      new Event('submit', { bubbles: true, cancelable: true }),
+    );
+    await flush();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // createAnchor produced a testid anchor, so computeAnchorUpgrade bails —
+    // no self-heal PATCH, only the create.
+    expect(api.create).toHaveBeenCalledTimes(1);
+    expect(api.update).not.toHaveBeenCalled();
+    target.remove();
+  });
+});
+

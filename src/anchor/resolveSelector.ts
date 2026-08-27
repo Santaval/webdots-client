@@ -49,7 +49,12 @@ function collectCandidates(doc: Document, anchor: AnchorDescriptor): Element[] {
 function queryAllByTag(doc: Document, selector: string, tag: string): Element[] {
   if (!selector) return [];
   try {
-    return Array.from(doc.querySelectorAll(selector)).filter((el) => el.tagName === tag);
+    const all = Array.from(doc.querySelectorAll(selector));
+    // An empty `tag` only occurs on the synthesized `coords` fallback
+    // (`api/dto.ts` has no element to read a tag from) — treat it as "tag
+    // unknown, don't filter" so a legacy row's selector can still resolve
+    // for self-healing (issue #7). Real anchors always carry a tag.
+    return tag ? all.filter((el) => el.tagName === tag) : all;
   } catch {
     return [];
   }
