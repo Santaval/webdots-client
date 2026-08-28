@@ -272,6 +272,10 @@ If your backend persists `anchor` (a nullable JSON column is enough), pins re-an
 
 The client always sends `anchor` and tolerates its absence in responses, so adding the column later is a non-breaking improvement.
 
+### The `screenshot` field (optional)
+
+`POST /annotations/:id/screenshot` (above) stores a captured screenshot against an existing annotation. The request body is `{ image: dataUrl }` — a `data:image/*;base64,...` string the server parses, persists, and echoes back on the returned row as the `screenshot` field (a stored URL/key, or `null` when no screenshot exists). A nullable text/URL column on the annotations table is all the schema needs; the client never sends a raw blob, only the data URL, and rejects payloads over ~2 MB or non-image MIME types before the network call (see [Screenshots](#screenshots-opt-in)). The upload is non-fatal: if it fails the annotation is never rolled back, so the column and the endpoint can land independently of the core create flow.
+
 ---
 
 ## Anchoring, and being honest about it
@@ -314,14 +318,33 @@ Scoped out on purpose, not forgotten:
 
 ```bash
 npm install
-npm run dev        # demo page at localhost:5173
+npm run dev        # source demo page at localhost:5173 (imports ../src)
+npm run demo:umd   # build, then serve the UMD embed demo at localhost:4173
 npm test           # vitest
 npm run typecheck
 npm run build      # es + umd + cjs + .d.ts
 npm run size       # enforces the 25 KB gzip budget
 ```
 
-The demo page is deliberately hostile — aggressive global `!important` resets, a sticky header, hashed class names, duplicate sibling structures — because that is what proves the isolation and anchoring actually work.
+The demo pages are deliberately hostile — aggressive global `!important` resets, a sticky header, hashed class names, duplicate sibling structures — because that is what proves the isolation and anchoring actually work.
+
+### Two demos, two distribution paths
+
+| Command | Page | Loads the widget via |
+| --- | --- | --- |
+| `npm run dev` | `demo/index.html` | `import { init } from '../src/index'` (Vite, source) |
+| `npm run demo:umd` | `demo/umd.html` | `<script src="../dist/webdots.umd.js">` then `window.Webdots.init` (the built UMD bundle — the primary distribution mode) |
+
+`npm run demo:umd` runs `npm run build` first (the bundle is gitignored and only exists after a build), then starts a zero-dependency static server ([`scripts/serve-demo.mjs`](./scripts/serve-demo.mjs)) rooted at the repo root so the page can reach `dist/webdots.umd.js`. Open `http://localhost:4173/demo/umd.html`; append `?stub=1` to run against an in-memory stub instead of a real server.
+
+### Stub vs live mode
+
+Both demos default to a **stub** mode that runs against an in-memory `AnnotationAPI` — no backend required. Switch to **live** mode to talk to a real `webdots` server:
+
+- **Source demo** (`npm run dev`): append `?mode=live` to the URL, or set `VITE_WEBDOTS_MODE=live` in `.env` (see [`.env.example`](./.env.example)). In live mode the `api` and `user` overrides are dropped, so the default `HttpAnnotationAPI` transport is used and the magic-link sign-in panel mounts — the reviewer signs in to establish a session. `VITE_WEBDOTS_API_URL` is required; `VITE_WEBDOTS_API_KEY` is required for the hosted server.
+- **UMD demo** (`npm run demo:umd`): edit the `API_URL` / `API_KEY` constants at the top of the inline `<script>` in `demo/umd.html`; append `?stub=1` to fall back to the stub.
+
+To run live mode against a local server: start `webdots` locally, add the demo's origin (e.g. `http://localhost:5173`) to the server's `devOrigins`, and ensure CORS allows `x-api-key` and `Authorization` (see [CORS](#cors)).
 
 ## License
 

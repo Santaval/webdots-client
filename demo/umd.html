@@ -1,0 +1,399 @@
+<!doctype html>
+<!--
+  Webdots UMD embed demo (#9).
+
+  Unlike demo/index.html (which imports source via Vite), THIS page loads the
+  BUILT UMD bundle — `dist/webdots.umd.js` — through a plain <script> tag and
+  calls `window.Webdots.init(...)`. It is the primary distribution path (the
+  one an embedder actually uses), so it gets exercised here.
+
+  Serve it from the repo root so `../dist/webdots.umd.js` resolves:
+    npm run demo:umd        # builds, then serves repo root on :4173
+  then open http://localhost:4173/demo/umd.html
+
+  By default it points at a real webdots server (see API_URL/API_KEY below).
+  Append ?stub=1 to run against an in-memory stub instead — useful for an
+  offline bundle smoke-test when no server is running.
+-->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Webdots demo — UMD embed</title>
+    <style>
+      /* ---- Aggressive global reset, on purpose ---------------------- */
+      * {
+        box-sizing: content-box !important;
+        margin: 3px !important;
+        padding: 2px !important;
+        border: 1px dashed transparent !important;
+        font-family: 'Comic Sans MS', cursive !important;
+        line-height: 2.4 !important;
+        letter-spacing: 0.5px !important;
+      }
+
+      html,
+      body {
+        margin: 0 !important;
+        padding: 0 !important;
+      }
+
+      body {
+        background: repeating-linear-gradient(45deg, #fffbe6, #fffbe6 10px, #fff3b0 10px, #fff3b0 20px) !important;
+        color: #222 !important;
+      }
+
+      div {
+        background-color: rgba(255, 0, 0, 0.03) !important;
+        outline: 1px solid rgba(0, 0, 255, 0.05) !important;
+      }
+
+      button {
+        background: linear-gradient(#ff5f6d, #ffc371) !important;
+        color: white !important;
+        border-radius: 999px !important;
+        padding: 14px 22px !important;
+        font-size: 18px !important;
+        font-weight: 900 !important;
+        text-transform: uppercase !important;
+        box-shadow: 0 0 0 4px hotpink !important;
+        cursor: crosshair !important;
+      }
+
+      input {
+        border: 4px groove purple !important;
+        background: yellow !important;
+        font-size: 20px !important;
+      }
+
+      a {
+        color: magenta !important;
+        text-decoration: line-through wavy red !important;
+      }
+
+      h1,
+      h2,
+      h3 {
+        color: teal !important;
+        text-shadow: 2px 2px 0 orange !important;
+      }
+
+      /* ---- Sticky header -------------------------------------------- */
+      .sh_1a2b3 {
+        position: sticky;
+        top: 0;
+        z-index: 500;
+        background: #111 !important;
+        color: #fff !important;
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        padding: 10px 24px !important;
+      }
+
+      .sh_1a2b3 * {
+        color: #fff !important;
+        background: transparent !important;
+      }
+
+      /* ---- Hashed CSS-module-like classes ----------------------------- */
+      .cmp_Card__x7f2a {
+        border: 1px solid #ccc !important;
+        border-radius: 8px !important;
+        padding: 20px !important;
+        background: #fff !important;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08) !important;
+      }
+
+      .cmp_Grid__q9k1z {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+        gap: 20px;
+        padding: 24px !important;
+      }
+
+      .cmp_Btn__z4m8p {
+        background: #0a7 !important;
+      }
+
+      /* ---- Layout scaffolding ---------------------------------------- */
+      main {
+        padding: 24px !important;
+      }
+
+      section {
+        margin-bottom: 48px !important;
+      }
+
+      .filler {
+        height: 420px;
+      }
+
+      .duplicate-block {
+        border: 2px solid #888 !important;
+        padding: 16px !important;
+        margin-bottom: 16px !important;
+      }
+
+      /* ---- Mode badge (host page element; widget itself is isolated) -- */
+      .mode-badge {
+        position: fixed;
+        top: 10px;
+        right: 16px;
+        z-index: 501;
+        background: #111 !important;
+        color: #fff !important;
+        padding: 6px 12px !important;
+        border-radius: 999px !important;
+        font-size: 12px !important;
+        font-weight: 700 !important;
+        font-family: ui-monospace, monospace !important;
+        line-height: 1.4 !important;
+        letter-spacing: 0 !important;
+        margin: 0 !important;
+        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3) !important;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="mode-badge" id="mode-badge">loading…</div>
+
+    <header class="sh_1a2b3">
+      <strong>HostileCorp Admin</strong>
+      <nav>
+        <a href="#one">Dashboard</a>
+        <a href="#two">Reports</a>
+        <a href="#three">Settings</a>
+      </nav>
+    </header>
+
+    <main>
+      <section id="one">
+        <h1>Webdots UMD demo</h1>
+        <p>
+          Same deliberately hostile host page as the source demo, but this time
+          the widget is loaded from the <strong>built UMD bundle</strong>
+          (<code>dist/webdots.umd.js</code>) via a plain <code>&lt;script&gt;</code> tag —
+          the distribution path an embedder actually uses. If the toolbar
+          (bottom right) looks like a sane UI element instead of this page's
+          garish theme, the UMD build's shadow DOM isolation works end to end.
+        </p>
+        <button id="plain-button" data-testid="cta-primary">Click me (host button)</button>
+        <input type="text" placeholder="Host input" data-testid="search-input" />
+      </section>
+
+      <section id="two" class="cmp_Grid__q9k1z">
+        <div class="cmp_Card__x7f2a" data-testid="card-1">
+          <h2>Card One</h2>
+          <p>Some card content with a nested <button class="cmp_Btn__z4m8p">Action</button>.</p>
+        </div>
+        <div class="cmp_Card__x7f2a" data-testid="card-2">
+          <h2>Card Two</h2>
+          <p>Duplicate structure test — no test id below.</p>
+          <button class="cmp_Btn__z4m8p">Action</button>
+        </div>
+        <div class="cmp_Card__x7f2a">
+          <h2>Card Three</h2>
+          <p>Duplicate structure test — no test id below.</p>
+          <button class="cmp_Btn__z4m8p">Action</button>
+        </div>
+      </section>
+
+      <section id="three">
+        <h2>Duplicate siblings</h2>
+        <div class="duplicate-block">
+          <span>Row</span>
+          <button>Edit</button>
+        </div>
+        <div class="duplicate-block">
+          <span>Row</span>
+          <button>Edit</button>
+        </div>
+        <div class="duplicate-block">
+          <span>Row</span>
+          <button>Edit</button>
+        </div>
+      </section>
+
+      <section>
+        <h2>Scroll filler 1</h2>
+        <div class="filler">Scroll past me — 3+ screens of content to test fixed-position pins.</div>
+      </section>
+      <section>
+        <h2>Scroll filler 2</h2>
+        <div class="filler">Still scrolling…</div>
+      </section>
+      <section>
+        <h2>Scroll filler 3</h2>
+        <div class="filler">Almost there…</div>
+      </section>
+      <section>
+        <h3>End of page</h3>
+        <p>If you made it here without the host CSS touching the toolbar, isolation works.</p>
+      </section>
+    </main>
+
+    <!--
+      The UMD bundle. Served from the repo root by `npm run demo:umd`, so the
+      relative path resolves to /dist/webdots.umd.js. An embedder would replace
+      this with their CDN URL, e.g. https://your-cdn/webdots.umd.js.
+    -->
+    <script src="../dist/webdots.umd.js"></script>
+    <script>
+      (function () {
+        'use strict';
+
+        // ---------------------------------------------------------------------------
+        // Embedder configuration. In a real embed these are the only values you
+        // touch. Set API_URL to your webdots server and API_KEY to your project
+        // key (required for the hosted server; omit for a self-hosted server with
+        // REQUIRE_API_KEY disabled). Append ?stub=1 to the page URL to swap in an
+        // in-memory stub API instead — handy for an offline bundle smoke-test.
+        // ---------------------------------------------------------------------------
+        var API_URL = 'http://localhost:3000/api/v1';
+        var API_KEY = null; // e.g. 'wd_live_xxxxxxxx' for the hosted server
+        var USE_STUB = new URLSearchParams(location.search).get('stub') === '1';
+
+        var badge = document.getElementById('mode-badge');
+        badge.textContent = USE_STUB ? 'UMD · stub' : 'UMD · live';
+        badge.title = USE_STUB
+          ? 'In-memory stub API — no backend.'
+          : 'Pointing at ' + API_URL + '. Start webdots locally and add this origin to devOrigins.';
+
+        // ---------------------------------------------------------------------------
+        // Opt-in screenshot capture (#8). The library ships no rasterizer (bundle
+        // budget); html2canvas is loaded lazily from a CDN on the first capture so
+        // this demo exercises the full capture -> upload -> store round-trip without
+        // adding a build dependency. Errors degrade to null (skip the screenshot).
+        // ---------------------------------------------------------------------------
+        var h2cPromise = null;
+        function loadHtml2Canvas() {
+          if (h2cPromise) return h2cPromise;
+          h2cPromise = new Promise(function (resolve) {
+            if (window.html2canvas) return resolve();
+            var s = document.createElement('script');
+            s.src = 'https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js';
+            s.async = true;
+            s.onload = function () { resolve(); };
+            s.onerror = function () { resolve(); }; // resolve either way; checked at the call site
+            document.head.appendChild(s);
+          });
+          return h2cPromise;
+        }
+
+        function captureScreenshot(ctx) {
+          return loadHtml2Canvas()
+            .then(function () {
+              if (typeof window.html2canvas !== 'function') return null;
+              return window.html2canvas(ctx.target, { backgroundColor: '#ffffff', scale: 1 });
+            })
+            .then(function (canvas) {
+              return canvas ? canvas.toDataURL('image/png') : null;
+            })
+            .catch(function () { return null; });
+        }
+
+        // ---------------------------------------------------------------------------
+        // Compact in-memory stub AnnotationAPI — mirrors demo/main.ts so ?stub=1
+        // works with no server running. Only loaded when ?stub=1 is present.
+        // ---------------------------------------------------------------------------
+        function createStubApi() {
+          var rows = {};
+          var counter = 0;
+          function clone(a) { return Object.assign({}, a); }
+          return {
+            list: function (query) {
+              var all = Object.keys(rows).map(function (k) { return rows[k]; });
+              if (query.pageUrl) all = all.filter(function (a) { return a.pageUrl === query.pageUrl; });
+              if (query.status) all = all.filter(function (a) { return a.status === query.status; });
+              if (query.priority) all = all.filter(function (a) { return a.priority === query.priority; });
+              return Promise.resolve(all.map(clone));
+            },
+            get: function (id) {
+              var f = rows[id];
+              return f ? Promise.resolve(clone(f)) : Promise.reject(new Error('[umd stub] not found: ' + id));
+            },
+            create: function (input) {
+              counter += 1;
+              var now = new Date().toISOString();
+              var a = {
+                id: 'stub_' + counter,
+                pageUrl: input.pageUrl,
+                selector: input.selector,
+                x: input.x,
+                y: input.y,
+                anchor: input.anchor,
+                title: input.title,
+                description: input.description,
+                status: 'OPEN',
+                priority: input.priority || 'MEDIUM',
+                authorName: input.authorName || 'Anonymous',
+                authorEmail: input.authorEmail,
+                screenshot: null,
+                resolvedAt: null,
+                createdAt: now,
+                updatedAt: now,
+              };
+              rows[a.id] = a;
+              return Promise.resolve(clone(a));
+            },
+            update: function (id, input) {
+              var e = rows[id];
+              if (!e) return Promise.reject(new Error('[umd stub] not found: ' + id));
+              var u = Object.assign({}, e, input, { updatedAt: new Date().toISOString() });
+              rows[id] = u;
+              return Promise.resolve(clone(u));
+            },
+            changeStatus: function (id, status) {
+              var e = rows[id];
+              if (!e) return Promise.reject(new Error('[umd stub] not found: ' + id));
+              var u = Object.assign({}, e, {
+                status: status,
+                resolvedAt: status === 'RESOLVED' ? new Date().toISOString() : null,
+                updatedAt: new Date().toISOString(),
+              });
+              rows[id] = u;
+              return Promise.resolve(clone(u));
+            },
+            remove: function (id) { delete rows[id]; return Promise.resolve(); },
+            uploadScreenshot: function (id, data) {
+              var e = rows[id];
+              if (!e) return Promise.reject(new Error('[umd stub] not found: ' + id));
+              var u = Object.assign({}, e, { screenshot: data, updatedAt: new Date().toISOString() });
+              rows[id] = u;
+              return Promise.resolve(clone(u));
+            },
+          };
+        }
+
+        // ---------------------------------------------------------------------------
+        // init(). `user` is omitted in live mode so the magic-link sign-in panel
+        // mounts (the most faithful end-to-end exercise of the auth flow); in stub
+        // mode a demo user is supplied to jump straight into annotation mode.
+        // ---------------------------------------------------------------------------
+        var config;
+        if (USE_STUB) {
+          config = {
+            apiUrl: API_URL,
+            user: { name: 'Demo QA', email: 'qa@example.com' },
+            debug: true,
+            api: createStubApi(),
+            captureScreenshot: captureScreenshot,
+          };
+          window.__webdotsApi = config.api; // console poking
+        } else {
+          config = {
+            apiUrl: API_URL,
+            apiKey: API_KEY || undefined,
+            debug: true,
+            captureScreenshot: captureScreenshot,
+            // no `user` -> magic-link sign-in panel mounts; reviewer signs in
+          };
+        }
+
+        var handle = window.Webdots.init(config);
+        window.__webdots = handle; // console poking: window.__webdots.setMode('annotate')
+      })();
+    </script>
+  </body>
+</html>
