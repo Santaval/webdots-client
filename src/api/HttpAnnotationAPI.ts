@@ -1,6 +1,6 @@
 import type { AnnotationAPI, CreateAnnotationInput, ListAnnotationsQuery, UpdateAnnotationInput } from './AnnotationAPI';
 import type { Annotation, AnnotationStatus } from '../core/types';
-import { annotationFromWire, toCreateBody, toUpdateBody, type AnnotationWire } from './dto';
+import { annotationFromWire, toCreateBody, toScreenshotBody, toUpdateBody, type AnnotationWire, type ScreenshotBody } from './dto';
 import { httpRequest, type HttpCore } from './http';
 
 export interface HttpAnnotationAPIOptions {
@@ -85,5 +85,26 @@ export class HttpAnnotationAPI implements AnnotationAPI {
   async remove(id: string, signal?: AbortSignal): Promise<void> {
     // 204 No Content — httpRequest skips JSON parsing for that status.
     await httpRequest<null>(this.core, 'DELETE', `/annotations/${encodeURIComponent(id)}`, undefined, signal);
+  }
+
+  /**
+   * `POST /annotations/:id/screenshot` (#8 / server #17). Sends the data URL
+   * as JSON `{ image }` (validated client-side by `toScreenshotBody`); the
+   * server stores the blob and returns the full, updated `AnnotationWire` row
+   * — same contract as `update`/`changeStatus` — which is mapped to the
+   * internal model and returned for upsert. Reuses the shared transport so
+   * auth headers, timeout/abort composition, and error mapping are identical
+   * to every other annotation request.
+   */
+  async uploadScreenshot(id: string, data: string, signal?: AbortSignal): Promise<Annotation> {
+    const body: ScreenshotBody = toScreenshotBody(data);
+    const wire = await httpRequest<AnnotationWire>(
+      this.core,
+      'POST',
+      `/annotations/${encodeURIComponent(id)}/screenshot`,
+      body,
+      signal,
+    );
+    return annotationFromWire(wire);
   }
 }

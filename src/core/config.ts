@@ -1,4 +1,4 @@
-import type { Annotation, WidgetMode } from './types';
+import type { Annotation, ScreenshotContext, WidgetMode } from './types';
 import type { AnnotationAPI } from '../api/AnnotationAPI';
 import type { AuthAPI } from '../api/AuthAPI';
 import { resolvePageKey, assertValidPageKey, type PageKeyResolver } from '../utils/pageKey';
@@ -30,6 +30,16 @@ export interface WebdotsConfig {
   testIdAttributes?: string[];
   requestTimeoutMs?: number;
   debug?: boolean;
+
+  /**
+   * Opt-in screenshot capture for newly-created annotations (#8). The library
+   * ships no rasterizer (bundle budget); supply a callback that returns a
+   * `data:` URL (e.g. via html2canvas). Invoked at create time with the
+   * clicked element + viewport + in-flight fields. Returning null/undefined
+   * skips the upload; throwing/rejecting is non-fatal (surfaces via
+   * `onError` + toast, the annotation is never lost). See `ScreenshotContext`.
+   */
+  captureScreenshot?: (ctx: ScreenshotContext) => Promise<string | null | undefined>;
 
   /** DI escape hatch; overrides apiUrl/apiKey for the annotations API. */
   api?: AnnotationAPI;
@@ -63,6 +73,7 @@ export interface ResolvedWebdotsConfig {
   testIdAttributes: string[];
   requestTimeoutMs: number;
   debug: boolean;
+  captureScreenshot: ((ctx: ScreenshotContext) => Promise<string | null | undefined>) | undefined;
   api: AnnotationAPI | undefined;
   authApi: AuthAPI | undefined;
   onError: ((error: Error) => void) | undefined;
@@ -127,6 +138,13 @@ export function resolveConfig(raw: WebdotsConfig): ResolvedWebdotsConfig {
     throw new Error('[webdots] config.testIdAttributes must be an array of strings when provided.');
   }
 
+  if (
+    raw.captureScreenshot !== undefined &&
+    typeof raw.captureScreenshot !== 'function'
+  ) {
+    throw new Error('[webdots] config.captureScreenshot must be a function when provided.');
+  }
+
   // Resolved once, eagerly, against the current location — the backend's
   // CreateAnnotationSchema validates `pageUrl` with zod `.url()`, so a
   // pageKey resolver that returns a non-URL string must fail fast here
@@ -148,6 +166,7 @@ export function resolveConfig(raw: WebdotsConfig): ResolvedWebdotsConfig {
     testIdAttributes: raw.testIdAttributes ?? DEFAULT_TEST_ID_ATTRIBUTES,
     requestTimeoutMs: raw.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
     debug: raw.debug ?? false,
+    captureScreenshot: raw.captureScreenshot,
     api: raw.api,
     authApi: raw.authApi,
     onError: raw.onError,

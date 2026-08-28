@@ -24,6 +24,9 @@ function stubApi(): AnnotationAPI {
       throw new Error('not used in these tests');
     },
     remove: async () => {},
+    uploadScreenshot: async () => {
+      throw new Error('not used in these tests');
+    },
   };
 }
 

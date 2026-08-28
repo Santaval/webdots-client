@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { annotationFromWire, toCreateBody, toUpdateBody, type AnnotationWire } from './dto';
+import { annotationFromWire, toCreateBody, toScreenshotBody, toUpdateBody, type AnnotationWire } from './dto';
 import type { AnchorDescriptor } from '../anchor/types';
 import type { CreateAnnotationInput, UpdateAnnotationInput } from './AnnotationAPI';
 
@@ -161,5 +161,52 @@ describe('toUpdateBody', () => {
 
   it('does not validate pageUrl shape (UpdateAnnotationInput never carries pageUrl)', () => {
     expect(() => toUpdateBody({ title: 'x' })).not.toThrow();
+  });
+});
+
+describe('toScreenshotBody (#8)', () => {
+  const pngDataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0x8AAAAASUVORK5CYII=';
+
+  it('wraps a valid image data URL in { image } unchanged', () => {
+    const body = toScreenshotBody(pngDataUrl);
+    expect(body).toEqual({ image: pngDataUrl });
+  });
+
+  it('accepts other image subtypes (jpeg, webp, svg+xml)', () => {
+    expect(() => toScreenshotBody('data:image/jpeg;base64,/9j/4AAQ')).not.toThrow();
+    expect(() => toScreenshotBody('data:image/webp;base64,UklGRkBAA')).not.toThrow();
+    expect(() => toScreenshotBody('data:image/svg+xml;base64,PHN2Zz4=')).not.toThrow();
+  });
+
+  it('rejects a non-image MIME type (e.g. text/plain)', () => {
+    expect(() => toScreenshotBody('data:text/plain;base64,aGVsbG8=')).toThrow(/image MIME type/);
+  });
+
+  it('rejects a data URL missing the ;base64 marker', () => {
+    // `data:image/png,...` (percent-encoded, not base64) is not the agreed shape.
+    expect(() => toScreenshotBody('data:image/png,foo')).toThrow(/data:image\/\*;base64/);
+  });
+
+  it('rejects a plain non-data URL', () => {
+    expect(() => toScreenshotBody('https://example.com/screenshot.png')).toThrow(/data:image\/\*;base64/);
+  });
+
+  it('rejects an empty string', () => {
+    expect(() => toScreenshotBody('')).toThrow(/non-empty data: URL/);
+  });
+
+  it('rejects a payload exceeding the 2 MB ceiling, fail-fast before any network call', () => {
+    // Build a >2MB string that still has a valid image-data-URL prefix.
+    const oversized = `data:image/png;base64,${'A'.repeat(2 * 1024 * 1024 + 1)}`;
+    expect(oversized.length).toBeGreaterThan(2 * 1024 * 1024);
+    expect(() => toScreenshotBody(oversized)).toThrow(/2\d+-byte upload limit/);
+  });
+
+  it('accepts a payload right at the 2 MB boundary', () => {
+    // Exact-length: prefix + base64 such that the whole string == 2*1024*1024.
+    const prefix = 'data:image/png;base64,';
+    const exact = prefix + 'A'.repeat(2 * 1024 * 1024 - prefix.length);
+    expect(exact.length).toBe(2 * 1024 * 1024);
+    expect(() => toScreenshotBody(exact)).not.toThrow();
   });
 });

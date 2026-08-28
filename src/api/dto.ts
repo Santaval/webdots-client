@@ -134,6 +134,55 @@ export interface UpdateAnnotationBody {
 }
 
 /**
+ * Body for `POST /annotations/:id/screenshot` (#8 / server #17). Carries the
+ * full `data:` URL so the server can parse the MIME prefix itself and reject
+ * oversized/wrong-type payloads with a clear 400. Kept as a single `image`
+ * field so the contract stays one-key and trivial to extend later.
+ */
+export interface ScreenshotBody {
+  image: string;
+}
+
+/**
+ * The server's ~2 MB upload ceiling (Santaval/webdots#17). Enforced HERE,
+ * synchronously, so an oversized capture fails fast with a clear message
+ * rather than after a network round-trip — same rationale as
+ * `assertVarcharLength`. Measured against the RAW data-URL string length
+ * (base64 inflation means the decoded bytes are ~3/4 of this, so this is the
+ * conservative/honest direction).
+ */
+const MAX_SCREENSHOT_BYTES = 2 * 1024 * 1024;
+
+/**
+ * Builds the screenshot upload body from a `data:` URL and fail-fast validates
+ * it: rejects anything that isn't a `data:image/...;base64,...` URL (non-image
+ * MIME, missing base64 marker, non-data URLs) and anything exceeding the 2 MB
+ * ceiling. Thrown synchronously before any network call, mirroring
+ * `toCreateBody`'s eager validation.
+ */
+export function toScreenshotBody(dataUrl: string): ScreenshotBody {
+  if (typeof dataUrl !== 'string' || dataUrl.length === 0) {
+    throw new Error('[webdots] screenshot must be a non-empty data: URL string.');
+  }
+  // `data:[<mediatype>][;base64],<data>` — require an image MIME + base64.
+  // The server re-validates, but catching the obvious mistakes here keeps the
+  // error message local and avoids a pointless 400 round-trip.
+  const match = /^data:([^;,]+)\/[^;,]+;base64,/.exec(dataUrl);
+  if (!match) {
+    throw new Error('[webdots] screenshot must be a data:image/*;base64,... URL.');
+  }
+  if (match[1] !== 'image') {
+    throw new Error(`[webdots] screenshot must be an image MIME type, got "${match[1]}".`);
+  }
+  if (dataUrl.length > MAX_SCREENSHOT_BYTES) {
+    throw new Error(
+      `[webdots] screenshot is ${dataUrl.length} bytes, exceeding the ${MAX_SCREENSHOT_BYTES}-byte upload limit.`,
+    );
+  }
+  return { image: dataUrl };
+}
+
+/**
  * `pageUrl` and `selector` are `VarChar(512)` on the backend. Truncating
  * either silently would corrupt the URL or stop a selector matching, so
  * both are REJECTED (never truncated) when too long — thrown synchronously

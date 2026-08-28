@@ -52,6 +52,13 @@ export interface UpdateAnnotationInput {
  * `changeStatus` is deliberately its own method, not folded into `update`:
  * the backend exposes `PATCH /annotations/:id/status` as a separate
  * endpoint from the generic `PATCH /annotations/:id`.
+ *
+ * `uploadScreenshot` (#8) targets the separate `POST /annotations/:id/screenshot`
+ * endpoint (server Santaval/webdots#17). It receives a `data:` URL string,
+ * is fire-and-forget from the create flow's perspective, and returns the
+ * fully-reconciled annotation row — the same shape every other mutating
+ * method returns — so `Widget` upserts it directly. Failure is non-fatal to
+ * the annotation and must never roll it back — `Widget` handles that policy.
  */
 export interface AnnotationAPI {
   list(query: ListAnnotationsQuery, signal?: AbortSignal): Promise<Annotation[]>;
@@ -60,4 +67,13 @@ export interface AnnotationAPI {
   update(id: string, input: UpdateAnnotationInput, signal?: AbortSignal): Promise<Annotation>;
   changeStatus(id: string, status: AnnotationStatus, signal?: AbortSignal): Promise<Annotation>;
   remove(id: string, signal?: AbortSignal): Promise<void>;
+  /**
+   * Uploads a screenshot for an existing annotation. `data` is a full
+   * `data:image/...;base64,...` URL string. Returns the server-confirmed,
+   * fully-reconciled annotation row (mirroring `update`/`changeStatus`) so the
+   * caller can upsert it directly — the `screenshot` column (and `updatedAt`)
+   * reflect the stored URL/key. Implementations should validate MIME + size
+   * client-side before the network call (see `toScreenshotBody`).
+   */
+  uploadScreenshot(id: string, data: string, signal?: AbortSignal): Promise<Annotation>;
 }

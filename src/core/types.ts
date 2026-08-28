@@ -32,6 +32,32 @@ export interface Annotation {
   updatedAt: string;
 }
 
+/**
+ * Handed to `config.captureScreenshot` when a reviewer creates an annotation,
+ * so the embedder can rasterize the clicked element (or the viewport) however
+ * it likes — html2canvas, modern-screenshot, a headless service, etc. The
+ * library ships NO rasterizer itself: a canvas-based one would blow the
+ * 25 KB gzip budget, and the SVG `foreignObject` technique is unreliable on
+ * real pages (cross-origin images taint the canvas; external stylesheets and
+ * web fonts are not applied). Returning a `data:` URL string uploads it;
+ * returning null/undefined skips the upload silently. Throwing/rejecting is
+ * non-fatal to the annotation and surfaces via `onError` + toast.
+ */
+export interface ScreenshotContext {
+  /** The element the reviewer clicked to start the annotation. */
+  target: Element;
+  /** Click coordinates in document/page space (same space as `Annotation.x/y`). */
+  pageX: number;
+  pageY: number;
+  /** Current viewport size at capture time. */
+  viewportW: number;
+  viewportH: number;
+  /** The in-flight annotation fields the reviewer is about to submit. */
+  title: string;
+  description?: string;
+  priority: AnnotationPriority;
+}
+
 /** The object returned by `init()` / exposed to consumers. */
 export interface WidgetHandle {
   destroy(): void;
