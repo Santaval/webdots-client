@@ -1,6 +1,6 @@
 {
   "name": "@webdots/annotate-client",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "Framework-agnostic, zero-dependency visual annotation widget for QA teams.",
   "license": "MIT",
