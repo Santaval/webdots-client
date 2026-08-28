@@ -1,6 +1,7 @@
 import {
   init,
   type WidgetHandle,
+  type WebdotsConfig,
   type AnnotationAPI,
   type Annotation,
   type AnnotationStatus,
@@ -18,11 +19,34 @@ declare global {
 }
 
 /**
+ * Demo mode switch (#9).
+ *
+ *  - `stub` (default): an in-memory `AnnotationAPI` so the demo runs with
+ *    no backend. Great for exercising the UI in isolation.
+ *  - `live`: talks to a real `webdots` server. `api`/`user` are OMITTED so
+ *    the default `HttpAnnotationAPI` transport is used and the magic-link
+ *    sign-in panel mounts (the reviewer signs in to establish a session).
+ *
+ * Resolved from, in priority order:
+ *   1. `?mode=stub|live` query string  — ad-hoc override for a single run;
+ *   2. `VITE_WEBDOTS_MODE` env var     — checked into `.env` for a machine;
+ *   3. `'stub'`                         — zero-config default.
+ */
+type DemoMode = 'stub' | 'live';
+
+function resolveDemoMode(): DemoMode {
+  const fromQuery = new URLSearchParams(location.search).get('mode');
+  if (fromQuery === 'stub' || fromQuery === 'live') return fromQuery;
+  const fromEnv = import.meta.env.VITE_WEBDOTS_MODE;
+  if (fromEnv === 'stub' || fromEnv === 'live') return fromEnv;
+  return 'stub';
+}
+
+/**
  * A trivial in-memory stub `AnnotationAPI` so this demo works standalone —
- * no live `webdots` backend required. Real integration (the plan's
- * "Backend integration" verification step) is done manually by running
- * `webdots` locally, adding this demo's origin to `devOrigins`, and
- * removing the `api` override below so `apiUrl` is used instead.
+ * no live `webdots` backend required. Switch to `live` mode (see
+ * `resolveDemoMode`) to exercise the real `HttpAnnotationAPI` transport
+ * against a running server instead.
  */
 function createStubApi(): AnnotationAPI {
   const rows = new Map<string, Annotation>();
@@ -161,17 +185,54 @@ async function captureScreenshot(ctx: ScreenshotContext): Promise<string | null>
   }
 }
 
-const handle = init({
-  apiUrl: 'http://localhost:3000/api/v1',
-  user: { name: 'Demo QA', email: 'qa@example.com' },
-  debug: true,
-  api,
-  captureScreenshot,
-});
+const mode = resolveDemoMode();
+
+/**
+ * Build the `init()` config for the active mode.
+ *
+ * `stub`: injects the in-memory API and a known demo user so the widget
+ * jumps straight into annotation mode with no sign-in.
+ *
+ * `live`: omits `api` (so the default `HttpAnnotationAPI` is built from
+ * `apiUrl`/`apiKey`) AND omits `user` (so the magic-link sign-in panel
+ * mounts and the reviewer establishes a session — the most faithful
+ * end-to-end exercise of the #4/#5/#6 flows). `apiUrl`/`apiKey` come from
+ * env vars so secrets aren't hardcoded; see `.env.example`.
+ */
+function buildConfig(mode: DemoMode): WebdotsConfig {
+  if (mode === 'live') {
+    const apiUrl = import.meta.env.VITE_WEBDOTS_API_URL;
+    const apiKey = import.meta.env.VITE_WEBDOTS_API_KEY as string | undefined;
+    if (!apiUrl) {
+      throw new Error(
+        '[demo] live mode requires VITE_WEBDOTS_API_URL (see .env.example). ' +
+          'Use ?mode=stub or VITE_WEBDOTS_MODE=stub to run without a server.',
+      );
+    }
+    return {
+      apiUrl,
+      apiKey,
+      debug: true,
+      captureScreenshot,
+    };
+  }
+  return {
+    apiUrl: 'http://localhost:3000/api/v1',
+    user: { name: 'Demo QA', email: 'qa@example.com' },
+    debug: true,
+    api,
+    captureScreenshot,
+  };
+}
+
+const handle = init(buildConfig(mode));
 
 // Expose for console poking: window.__webdots.setMode('annotate'), etc.
 window.__webdots = handle;
 // Expose the stub API too, so a manual QA pass (M5's "force an API failure"
 // verification step) can inject a failure without touching source, e.g.:
 //   window.__webdotsApi.create = () => Promise.reject(new Error('Simulated failure'));
-window.__webdotsApi = api;
+// (Only set in stub mode — in live mode there is no in-process API to poke.)
+if (mode === 'stub') {
+  window.__webdotsApi = api;
+}

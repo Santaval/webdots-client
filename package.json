@@ -39,7 +39,8 @@
     "lint": "eslint .",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "size": "node scripts/size-limit.mjs"
+    "size": "node scripts/size-limit.mjs",
+    "demo:umd": "npm run build && node scripts/serve-demo.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^9.0.0",
