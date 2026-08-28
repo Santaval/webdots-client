@@ -63,8 +63,8 @@ async function captureScreenshot(ctx: ScreenshotContext): Promise<string | null>
  * hardcoded; see `.env.example`.
  */
 function buildConfig(): WebdotsConfig {
-  const apiUrl = import.meta.env.VITE_WEBDOTS_API_URL;
-  const apiKey = import.meta.env.VITE_WEBDOTS_API_KEY as string | undefined;
+  const apiUrl = "http://localhost:3000/api/v1";
+  const apiKey = "wdk_d7b38ba5390cb30aa52ca2679f98a471";
   if (!apiUrl) {
     throw new Error('[demo] requires VITE_WEBDOTS_API_URL (see .env.example).');
   }

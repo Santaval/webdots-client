@@ -124,7 +124,8 @@ describe('HttpAnnotationAPI', () => {
     const [url, init] = fetchMock.mock.calls[0]!;
     expect(url).toBe('https://api.test/v1/annotations');
     expect(init!.method).toBe('POST');
-    expect(JSON.parse(init!.body as string).anchor).toEqual(anchor);
+    const { v, ...rest } = anchor;
+    expect(JSON.parse(init!.body as string).anchor).toEqual({ ...rest, version: v });
     expect(result.id).toBe('srv_new');
   });
 

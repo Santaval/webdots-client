@@ -108,7 +108,7 @@ export interface CreateAnnotationBody {
   x: number;
   y: number;
   /** Always sent — harmless if the server ignores it until the `anchor` column exists. */
-  anchor: AnchorDescriptor;
+  anchor: AnchorDescriptorWire;
   title: string;
   description?: string;
   priority?: AnnotationPriority;
@@ -130,7 +130,20 @@ export interface UpdateAnnotationBody {
   selector?: string;
   x?: number;
   y?: number;
-  anchor?: AnchorDescriptor;
+  anchor?: AnchorDescriptorWire;
+}
+
+/**
+ * Wire shape of the anchor envelope. The server's Zod/domain validators
+ * require a top-level `version` field (README: `{ "version": "1", ... }`);
+ * the internal `AnchorDescriptor` instead carries `v` (see `anchor/types.ts`).
+ * `toWireAnchor` bridges the two so the mismatch never reaches the network.
+ */
+export type AnchorDescriptorWire = Omit<AnchorDescriptor, 'v'> & { version: 1 };
+
+function toWireAnchor(anchor: AnchorDescriptor): AnchorDescriptorWire {
+  const { v, ...rest } = anchor;
+  return { ...rest, version: v };
 }
 
 /**
@@ -210,7 +223,7 @@ export function toCreateBody(input: CreateAnnotationInput): CreateAnnotationBody
     selector: input.selector,
     x: input.x,
     y: input.y,
-    anchor: input.anchor,
+    anchor: toWireAnchor(input.anchor),
     title: input.title,
     description: input.description,
     priority: input.priority,
@@ -230,7 +243,7 @@ export function toUpdateBody(input: UpdateAnnotationInput): UpdateAnnotationBody
     selector: input.selector,
     x: input.x,
     y: input.y,
-    anchor: input.anchor,
+    anchor: input.anchor ? toWireAnchor(input.anchor) : undefined,
   };
 }
 

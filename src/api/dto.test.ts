@@ -87,10 +87,11 @@ describe('toCreateBody', () => {
     authorName: 'QA',
   };
 
-  it('passes through a valid input unchanged (plus always including anchor)', () => {
+  it('passes through a valid input unchanged (plus always including anchor, remapped to the wire `version` field)', () => {
     const body = toCreateBody(validInput);
     expect(body.pageUrl).toBe(validInput.pageUrl);
-    expect(body.anchor).toEqual(anchor);
+    const { v, ...rest } = anchor;
+    expect(body.anchor).toEqual({ ...rest, version: v });
   });
 
   it('rejects a pageUrl that is not a parseable URL', () => {
