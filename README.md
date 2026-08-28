@@ -116,18 +116,48 @@ The HTTP layer is swappable. Implement `AnnotationAPI` and pass it as `config.ap
 import { init, type AnnotationAPI } from '@webdots/annotate-client';
 
 const myApi: AnnotationAPI = {
-  list:         (query, signal) => { /* … */ },
-  get:          (id, signal) => { /* … */ },
-  create:       (input, signal) => { /* … */ },
-  update:       (id, input, signal) => { /* … */ },
-  changeStatus: (id, status, signal) => { /* … */ },
-  remove:       (id, signal) => { /* … */ },
+  list:               (query, signal) => { /* … */ },
+  get:                (id, signal) => { /* … */ },
+  create:             (input, signal) => { /* … */ },
+  update:             (id, input, signal) => { /* … */ },
+  changeStatus:       (id, status, signal) => { /* … */ },
+  remove:             (id, signal) => { /* … */ },
+  uploadScreenshot:   (id, data, signal) => { /* … */ },
 };
 
 init({ apiUrl: 'https://unused.example', user: { name: 'QA' }, api: myApi });
 ```
 
 Every method receives an `AbortSignal` so `destroy()` can cancel in-flight work. All methods return the internal `Annotation` model — the wire format is confined to a single mapping module, so backend drift never reaches the UI.
+
+---
+
+## Screenshots (opt-in)
+
+The `Annotation.screenshot` field exists on the model but the library ships **no rasterizer** — a canvas-based one (html2canvas is ~100+ KB) would blow the 25 KB gzip budget, and the SVG `foreignObject` technique is unreliable on real pages (cross-origin images taint the canvas; external stylesheets and web fonts aren't applied). Instead, capture is **opt-in via a callback** you supply, so the weight stays outside the bundle:
+
+```ts
+import { init, type ScreenshotContext } from '@webdots/annotate-client';
+import html2canvas from 'html2canvas';
+
+const widget = init({
+  apiUrl: 'https://api.webdots.app/api/v1',
+  apiKey: 'your-project-key',
+  user: { name: 'QA' },
+  captureScreenshot: async (ctx: ScreenshotContext) => {
+    // ctx.target      — the element the reviewer clicked
+    // ctx.pageX/pageY — click coordinates in document space
+    // ctx.viewportW/H — current viewport size
+    // ctx.title/description/priority — the in-flight annotation fields
+    const canvas = await html2canvas(ctx.target, { backgroundColor: '#ffffff' });
+    return canvas.toDataURL('image/png'); // a data: URL; return null to skip
+  },
+});
+```
+
+When a reviewer creates an annotation, the callback runs **in parallel** with the network create. After the annotation is saved, the captured `data:` URL is uploaded to `POST /annotations/:id/screenshot` (server issue Santaval/webdots#17) and the returned, server-confirmed row replaces the local one — so the pin/card renders the stored screenshot on the next paint.
+
+**Failure is non-fatal.** If the callback throws/rejects, or the upload fails, the error surfaces via `onError` and a toast, but **the annotation is never lost or rolled back** — the screenshot is an optional enrichment, not part of the core data. Returning `null`/`undefined` silently skips the upload (the embedder's choice). The data URL is validated client-side first: only `data:image/*;base64,...` URLs are sent, and payloads over ~2 MB are rejected before the network call.
 
 ---
 
@@ -173,6 +203,7 @@ The default transport calls:
 | `PATCH` | `/annotations/:id` | Partial update. |
 | `PATCH` | `/annotations/:id/status` | Body is exactly `{ "status": "OPEN" \| "RESOLVED" }`. Separate from the generic `PATCH`. |
 | `DELETE` | `/annotations/:id` | Expects `204` with no body. |
+| `POST` | `/annotations/:id/screenshot` | Body `{ image: dataUrl }` (a `data:image/*;base64,...` string). Returns `200` with the full, updated annotation row — the `screenshot` field carries the stored URL/key. ~2 MB ceiling, image MIME only. |
 
 ### Authentication
 
@@ -268,7 +299,7 @@ Chrome, Edge, and Firefox current; **Safari 15+**. Constructable Stylesheets are
 
 Scoped out on purpose, not forgotten:
 
-- **Screenshots** — the field exists but is never populated; a canvas rasterizer would dominate the bundle.
+- **Screenshots** — capture is opt-in via a `captureScreenshot` callback (see above); the library ships no rasterizer to stay within the bundle budget.
 - **Pin clustering** — overlapping pins simply stack.
 - **Comments, threads, mentions, assignees** — one annotation is one note.
 - **Offline queue** — a failed write surfaces an error and rolls back.

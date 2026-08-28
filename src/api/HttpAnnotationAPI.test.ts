@@ -162,6 +162,64 @@ describe('HttpAnnotationAPI', () => {
     expect(JSON.parse(init!.body as string)).toEqual({ status: 'RESOLVED' });
   });
 
+  it('uploadScreenshot() posts { image } to /:id/screenshot and returns the mapped annotation (#8)', async () => {
+    const fetchMock = abortableFetchMock(() =>
+      mockResponse(200, { ...wireAnnotation, id: 'srv_1', screenshot: 'https://cdn.test/srv_1.png' }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const api = new HttpAnnotationAPI({ apiUrl: 'https://api.test/v1', requestTimeoutMs: 5000 });
+    const dataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0x8AAAAASUVORK5CYII=';
+    const result = await api.uploadScreenshot('srv_1', dataUrl);
+
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('https://api.test/v1/annotations/srv_1/screenshot');
+    expect(init!.method).toBe('POST');
+    expect(JSON.parse(init!.body as string)).toEqual({ image: dataUrl });
+    // The full row is returned and mapped (screenshot carries the stored URL/key).
+    expect(result.id).toBe('srv_1');
+    expect(result.screenshot).toBe('https://cdn.test/srv_1.png');
+  });
+
+  it('uploadScreenshot() URL-encodes an id containing path-unsafe characters', async () => {
+    const fetchMock = abortableFetchMock(() => mockResponse(200, { ...wireAnnotation }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const api = new HttpAnnotationAPI({ apiUrl: 'https://api.test/v1', requestTimeoutMs: 5000 });
+    await api.uploadScreenshot('a/b c', 'data:image/png;base64,iVBOR');
+
+    const [url] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('https://api.test/v1/annotations/a%2Fb%20c/screenshot');
+  });
+
+  it('uploadScreenshot() carries Authorization: Bearer alongside x-api-key (bodied request)', async () => {
+    const fetchMock = abortableFetchMock(() => mockResponse(200, { ...wireAnnotation }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const api = new HttpAnnotationAPI({
+      apiUrl: 'https://api.test/v1',
+      apiKey: 'secret',
+      requestTimeoutMs: 5000,
+      getToken: () => 'tok_123',
+    });
+    await api.uploadScreenshot('srv_1', 'data:image/png;base64,iVBOR');
+
+    const headers = fetchMock.mock.calls[0]![1]!.headers as Record<string, string>;
+    expect(headers['Authorization']).toBe('Bearer tok_123');
+    expect(headers['x-api-key']).toBe('secret');
+    expect(headers['Content-Type']).toBe('application/json');
+  });
+
+  it('uploadScreenshot() re-throws the toScreenshotBody validation synchronously (no fetch)', async () => {
+    const fetchMock = vi.fn(async () => mockResponse(200, { ...wireAnnotation }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const api = new HttpAnnotationAPI({ apiUrl: 'https://api.test/v1', requestTimeoutMs: 5000 });
+    // Non-image MIME — rejected before any network call.
+    await expect(api.uploadScreenshot('srv_1', 'data:text/plain;base64,aGk=')).rejects.toThrow(/image MIME type/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('remove() handles 204 No Content without attempting to parse a JSON body', async () => {
     const fetchMock = abortableFetchMock(() => mockResponse(204));
     vi.stubGlobal('fetch', fetchMock);

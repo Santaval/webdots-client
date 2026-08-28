@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { init, destroy, AuthError } from '../index';
+import { init, destroy, AuthError, type ScreenshotContext } from '../index';
 import { ExpiredCodeError } from '../api/errors';
 import type { AnnotationAPI, UpdateAnnotationInput } from '../api/AnnotationAPI';
 import type { AuthAPI, MagicLinkSession } from '../api/AuthAPI';
-import type { Annotation, AnnotationStatus } from './types';
+import type { Annotation, AnnotationStatus, WidgetMode } from './types';
 import type { AnchorDescriptor } from '../anchor/types';
 import type { WebdotsConfig } from './config';
 import { resolvePageKey } from '../utils/pageKey';
@@ -48,6 +48,10 @@ function makeStubApi(initialList: Annotation[] = []) {
       resolvedAt: status === 'RESOLVED' ? '2026-01-02T00:00:00.000Z' : null,
     })),
     remove: vi.fn(async (): Promise<void> => {}),
+    uploadScreenshot: vi.fn(async (id: string, data: string): Promise<Annotation> => ({
+      ...makeAnnotation({ id }),
+      screenshot: data,
+    })),
   } satisfies AnnotationAPI;
 }
 
@@ -993,4 +997,213 @@ describe('Widget anchor self-healing (issue #7)', () => {
     target.remove();
   });
 });
+
+describe('Widget screenshot capture & upload (issue #8)', () => {
+  afterEach(() => {
+    destroy();
+    document.body.innerHTML = '';
+    vi.restoreAllMocks();
+  });
+
+  const pngDataUrl =
+    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0x8AAAAASUVORK5CYII=';
+
+  /** Drives a full click → compose → submit create and returns the click target. */
+  async function driveCreate(
+    handle: { setMode: (m: WidgetMode) => void },
+    root: ShadowRoot,
+    title = 'New issue',
+  ): Promise<HTMLButtonElement> {
+    handle.setMode('annotate');
+    const target = document.createElement('button');
+    document.body.appendChild(target);
+    target.dispatchEvent(new MouseEvent('click', { bubbles: true, composed: true, clientX: 5, clientY: 6 }));
+    const titleInput = root.querySelector('[aria-label="Annotation title"]') as HTMLInputElement;
+    titleInput.value = title;
+    (root.querySelector('.wd-form') as HTMLFormElement).dispatchEvent(
+      new Event('submit', { bubbles: true, cancelable: true }),
+    );
+    return target;
+  }
+
+  it('invokes captureScreenshot with the clicked target, viewport, and in-flight fields', async () => {
+    const api = makeStubApi([]);
+    api.create.mockResolvedValueOnce(makeAnnotation({ id: 'srv_new' }));
+    const capture = vi.fn<(ctx: ScreenshotContext) => Promise<string>>(async () => pngDataUrl);
+    const { handle, root } = await mount(api, { captureScreenshot: capture });
+
+    const target = await driveCreate(handle, root, 'Broken CTA');
+    await flush();
+
+    expect(capture).toHaveBeenCalledTimes(1);
+    const ctx = capture.mock.calls[0]![0]!;
+    expect(ctx.target).toBe(target);
+    expect(ctx.title).toBe('Broken CTA');
+    expect(ctx.priority).toBe('MEDIUM');
+    // jsdom defaults: 1024 x 768 — the point is a real viewport size is passed.
+    expect(ctx.viewportW).toBeGreaterThan(0);
+    expect(ctx.viewportH).toBeGreaterThan(0);
+  });
+
+  it('on a successful capture + upload, updates the annotation screenshot in the store', async () => {
+    const api = makeStubApi([]);
+    api.create.mockResolvedValueOnce(makeAnnotation({ id: 'srv_new' }));
+    const capture = vi.fn(async () => pngDataUrl);
+    const { handle, root } = await mount(api, { captureScreenshot: capture });
+
+    await driveCreate(handle, root);
+    await flush();
+
+    // The upload is keyed on the server-assigned id (not the local_ temp id).
+    await vi.waitFor(() => {
+      expect(api.uploadScreenshot).toHaveBeenCalledTimes(1);
+    });
+    expect(api.uploadScreenshot.mock.calls[0]![0]).toBe('srv_new');
+    expect(api.uploadScreenshot.mock.calls[0]![1]).toBe(pngDataUrl);
+
+    await vi.waitFor(() => {
+      expect(handle.getAnnotations().find((a) => a.id === 'srv_new')?.screenshot).toBe(pngDataUrl);
+    });
+  });
+
+  it('a null capture skips the upload entirely (embedder opted out)', async () => {
+    const api = makeStubApi([]);
+    api.create.mockResolvedValueOnce(makeAnnotation({ id: 'srv_new' }));
+    const capture = vi.fn(async () => null);
+    const { handle, root } = await mount(api, { captureScreenshot: capture });
+
+    await driveCreate(handle, root);
+    await flush();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(api.uploadScreenshot).not.toHaveBeenCalled();
+    // The annotation itself is intact.
+    expect(handle.getAnnotations()).toHaveLength(1);
+  });
+
+  it('an undefined capture also skips the upload', async () => {
+    const api = makeStubApi([]);
+    api.create.mockResolvedValueOnce(makeAnnotation({ id: 'srv_new' }));
+    const capture = vi.fn(async () => undefined);
+    const { handle, root } = await mount(api, { captureScreenshot: capture });
+
+    await driveCreate(handle, root);
+    await flush();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(api.uploadScreenshot).not.toHaveBeenCalled();
+    expect(handle.getAnnotations()).toHaveLength(1);
+  });
+
+  it('a rejecting capture surfaces via onError + toast but leaves the annotation intact', async () => {
+    const api = makeStubApi([]);
+    api.create.mockResolvedValueOnce(makeAnnotation({ id: 'srv_new' }));
+    const capture = vi.fn(async () => {
+      throw new Error('rasterizer failed');
+    });
+    const onError = vi.fn();
+    const { handle, root } = await mount(api, { captureScreenshot: capture, onError });
+
+    await driveCreate(handle, root);
+    await flush();
+
+    await vi.waitFor(() => {
+      expect(onError).toHaveBeenCalledWith(expect.objectContaining({ message: 'rasterizer failed' }));
+    });
+    // Non-fatal acceptance criterion: the annotation survives, no upload attempted.
+    expect(api.uploadScreenshot).not.toHaveBeenCalled();
+    expect(handle.getAnnotations()).toHaveLength(1);
+    // And the failure is visible in the shadow DOM.
+    await vi.waitFor(() => {
+      expect(root.querySelector('.wd-toast__message')?.textContent).toBe('rasterizer failed');
+    });
+  });
+
+  it('a synchronous throw from the capture callback is normalized to a rejection and surfaced the same way', async () => {
+    const api = makeStubApi([]);
+    api.create.mockResolvedValueOnce(makeAnnotation({ id: 'srv_new' }));
+    const capture = vi.fn(() => {
+      throw new Error('sync boom');
+    });
+    const onError = vi.fn();
+    const { handle, root } = await mount(api, { captureScreenshot: capture, onError });
+
+    await driveCreate(handle, root);
+    await flush();
+
+    await vi.waitFor(() => {
+      expect(onError).toHaveBeenCalledWith(expect.objectContaining({ message: 'sync boom' }));
+    });
+    expect(handle.getAnnotations()).toHaveLength(1);
+  });
+
+  it('a failed upload surfaces via onError + toast but NEVER rolls back the annotation', async () => {
+    const api = makeStubApi([]);
+    api.create.mockResolvedValueOnce(makeAnnotation({ id: 'srv_new' }));
+    api.uploadScreenshot.mockRejectedValueOnce(new Error('upload 500'));
+    const capture = vi.fn(async () => pngDataUrl);
+    const onError = vi.fn();
+    const { handle, root } = await mount(api, { captureScreenshot: capture, onError });
+
+    await driveCreate(handle, root);
+    await flush();
+
+    await vi.waitFor(() => {
+      expect(api.uploadScreenshot).toHaveBeenCalledTimes(1);
+    });
+    await vi.waitFor(() => {
+      expect(onError).toHaveBeenCalledWith(expect.objectContaining({ message: 'upload 500' }));
+    });
+    // Acceptance criterion (#8): upload failure is non-fatal — the annotation
+    // is NOT lost or rolled back.
+    expect(handle.getAnnotations()).toHaveLength(1);
+    expect(handle.getAnnotations()[0]!.id).toBe('srv_new');
+    // The toast surfaces the upload error to the reviewer.
+    await vi.waitFor(() => {
+      expect(root.querySelector('.wd-toast__message')?.textContent).toBe('upload 500');
+    });
+  });
+
+  it('without captureScreenshot configured, no capture runs and no upload is attempted (bundle-safe default)', async () => {
+    const api = makeStubApi([]);
+    api.create.mockResolvedValueOnce(makeAnnotation({ id: 'srv_new' }));
+    const { handle, root } = await mount(api); // no captureScreenshot
+
+    await driveCreate(handle, root);
+    await flush();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(api.uploadScreenshot).not.toHaveBeenCalled();
+    expect(handle.getAnnotations()).toHaveLength(1);
+    expect(handle.getAnnotations()[0]!.id).toBe('srv_new');
+  });
+
+  it('capture starts in parallel with create — the callback is invoked before create resolves', async () => {
+    // Make create resolve slowly; capture should already have been called by
+    // the time create settles (the two run concurrently, not serially).
+    const api = makeStubApi([]);
+    let createResolved = false;
+    api.create.mockImplementationOnce(
+      () =>
+        new Promise<Annotation>((resolve) =>
+          setTimeout(() => {
+            createResolved = true;
+            resolve(makeAnnotation({ id: 'srv_new' }));
+          }, 20),
+        ),
+    );
+    const capture = vi.fn(async () => pngDataUrl);
+    const { handle, root } = await mount(api, { captureScreenshot: capture });
+
+    await driveCreate(handle, root);
+    // Drain the 20ms create timer.
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(createResolved).toBe(true);
+    // Capture was invoked while create was still in flight (it was called
+    // synchronously at createAnnotation start, before the first await).
+    expect(capture).toHaveBeenCalledTimes(1);
+  });
+});
+
 

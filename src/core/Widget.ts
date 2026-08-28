@@ -3,7 +3,7 @@ import type { PublicEvents } from './events';
 import type { ResolvedWebdotsConfig } from './config';
 import { Store, type AnnotationDiff } from './Store';
 import { PinManager } from './PinManager';
-import type { Annotation, AnnotationPriority, AnnotationStatus, WidgetHandle, WidgetMode } from './types';
+import type { Annotation, AnnotationPriority, AnnotationStatus, ScreenshotContext, WidgetHandle, WidgetMode } from './types';
 import type { AnchorDescriptor, ResolveConfidence } from '../anchor/types';
 import { createAnchor } from '../anchor/createAnchor';
 import type { AnnotationAPI, UpdateAnnotationInput } from '../api/AnnotationAPI';
@@ -30,6 +30,12 @@ interface PendingCreate {
   anchor: AnchorDescriptor;
   pageX: number;
   pageY: number;
+  /**
+   * The clicked element, retained so `config.captureScreenshot` can rasterize
+   * it at create time (#8). The composer popover may cover the click point, so
+   * the element is captured here at click time rather than re-derived later.
+   */
+  target: Element;
 }
 
 /** Viewport point a detail popover (card or edit form) is anchored to. */
@@ -519,7 +525,7 @@ export class Widget implements WidgetHandle {
       testIdAttributes: this.config.testIdAttributes,
     });
 
-    this.pendingCreate = { anchor, pageX, pageY };
+    this.pendingCreate = { anchor, pageX, pageY, target };
     this.openComposer(event.clientX, event.clientY);
   }
 
@@ -559,13 +565,13 @@ export class Widget implements WidgetHandle {
     priority: AnnotationPriority;
   }): void {
     if (!this.pendingCreate) return;
-    const { anchor, pageX, pageY } = this.pendingCreate;
+    const { anchor, pageX, pageY, target } = this.pendingCreate;
 
     // Fire-and-forget from the bus handler's point of view — createAnnotation()
     // catches everything internally, so this never produces an unhandled
     // rejection. The composer closes immediately; the pin appears
     // immediately too (optimistic), well before the network round-trip.
-    void this.createAnnotation(anchor, pageX, pageY, payload);
+    void this.createAnnotation(anchor, pageX, pageY, target, payload);
     this.closeComposer();
   }
 
@@ -574,11 +580,21 @@ export class Widget implements WidgetHandle {
    * temp id, then is reconciled to the server-assigned id on success
    * (`Store.replaceId` — atomic, single diff, no renumbering flash), or
    * removed with an `onError` report on failure.
+   *
+   * #8: when `config.captureScreenshot` is set, the embedder's rasterizer is
+   * kicked off IN PARALLEL with the network create so the (potentially slow)
+   * capture overlaps the round-trip. After the row is reconciled to its
+   * server id, the captured data URL — if any — is uploaded to
+   * `POST /annotations/:id/screenshot` and the returned, server-confirmed
+   * row is upserted. The entire screenshot path is NON-FATAL: a capture or
+   * upload failure surfaces via `onError` + toast but the annotation is never
+   * lost or rolled back (issue #8 acceptance criterion).
    */
   private async createAnnotation(
     anchor: AnchorDescriptor,
     pageX: number,
     pageY: number,
+    target: Element,
     payload: { title: string; description?: string; priority: AnnotationPriority },
   ): Promise<void> {
     // Defensive: annotate mode is gated on sign-in, so `config.user` should
@@ -624,6 +640,15 @@ export class Widget implements WidgetHandle {
     };
     this.store.upsert(optimistic);
 
+    // #8: start the embedder's capture BEFORE awaiting the network create so
+    // the rasterization overlaps the round-trip. A synchronous throw from the
+    // callback is normalized into a rejected promise by `startCapture` and
+    // surfaced (non-fatally) by `attachScreenshot`. No callback configured →
+    // a resolved-undefined promise, i.e. zero capture work.
+    const capturePromise = this.config.captureScreenshot
+      ? this.startCapture(target, pageX, pageY, payload)
+      : Promise.resolve(undefined);
+
     try {
       const created = await this.api.create(
         {
@@ -646,11 +671,88 @@ export class Widget implements WidgetHandle {
       if (this.abortController.signal.aborted) return; // destroyed mid-flight — nothing left to reconcile
       this.store.replaceId(tempId, created);
       this.config.onAnnotationCreated?.(created);
+      // #8: upload the captured screenshot (if any) AFTER the row is
+      // reconciled to its server id — the upload endpoint is keyed on the
+      // real id. Fire-and-forget from the create flow; failures are handled
+      // entirely inside `attachScreenshot` and never reach this try/catch.
+      void this.attachScreenshot(created.id, capturePromise);
     } catch (err) {
       if (this.abortController.signal.aborted) return; // destroy() already tore everything down
       this.store.remove(tempId);
       if (err instanceof AuthError && (this.sessionToken || this.sessionExpired)) {
         this.expireSession(); // JWT expired — drop the optimistic pin and re-prompt
+        return;
+      }
+      this.reportError(toError(err));
+    }
+  }
+
+  /**
+   * Invokes the embedder's `captureScreenshot` callback with a
+   * `ScreenshotContext` built from the click. Wraps a synchronous throw from
+   * the callback as a rejected promise so `attachScreenshot` can handle both
+   * sync and async failures uniformly.
+   */
+  private startCapture(
+    target: Element,
+    pageX: number,
+    pageY: number,
+    payload: { title: string; description?: string; priority: AnnotationPriority },
+  ): Promise<string | null | undefined> {
+    const ctx: ScreenshotContext = {
+      target,
+      pageX,
+      pageY,
+      viewportW: window.innerWidth,
+      viewportH: window.innerHeight,
+      title: payload.title,
+      description: payload.description,
+      priority: payload.priority,
+    };
+    try {
+      return Promise.resolve(this.config.captureScreenshot!(ctx));
+    } catch (err) {
+      return Promise.reject(err instanceof Error ? err : new Error(String(err)));
+    }
+  }
+
+  /**
+   * #8: awaits the in-flight capture, then — if it yielded a data URL and the
+   * widget hasn't been destroyed — uploads it and upserts the server-confirmed
+   * row. Every failure here (capture rejection, upload error, size/MIME
+   * validation in `toScreenshotBody`) is NON-FATAL: it surfaces via
+   * `onError` + toast, but the annotation created in `createAnnotation` is
+   * never rolled back — the screenshot is an optional enrichment, not part of
+   * the annotation's core data. A token-present auth failure re-prompts
+   * sign-in (mirroring the other write paths) without touching the row.
+   */
+  private async attachScreenshot(
+    annotationId: string,
+    capturePromise: Promise<string | null | undefined>,
+  ): Promise<void> {
+    let dataUrl: string | null | undefined;
+    try {
+      dataUrl = await capturePromise;
+    } catch (err) {
+      if (this.abortController.signal.aborted) return;
+      this.reportError(toError(err));
+      return;
+    }
+    if (this.abortController.signal.aborted) return;
+    // null/undefined → the embedder opted out of a screenshot for this click.
+    if (!dataUrl) return;
+
+    try {
+      const updated = await this.api.uploadScreenshot(annotationId, dataUrl, this.abortController.signal);
+      if (this.abortController.signal.aborted) return;
+      // The row may have been deleted while the upload was in flight — a
+      // stale upsert would resurrect it, so guard on its continued existence.
+      if (!this.store.get(annotationId)) return;
+      this.store.upsert(updated);
+    } catch (err) {
+      if (this.abortController.signal.aborted) return;
+      if (err instanceof AuthError && (this.sessionToken || this.sessionExpired)) {
+        this.expireSession();
         return;
       }
       this.reportError(toError(err));

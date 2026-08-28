@@ -53,6 +53,9 @@ describe('resolveConfig', () => {
         throw new Error('unused');
       },
       remove: async () => {},
+      uploadScreenshot: async () => {
+        throw new Error('unused');
+      },
     };
     const resolved = resolveConfig({ ...baseConfig, api: stubApi });
     expect(resolved.api).toBe(stubApi);
