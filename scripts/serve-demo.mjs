@@ -101,7 +101,6 @@ const server = createServer(async (req, res) => {
 server.listen(port, () => {
   const url = `http://localhost:${port}/demo/umd.html`;
   console.log('[demo:umd] serving repo root on :%d', port);
-  console.log('[demo:umd] UMD demo (live):    %s', url);
-  console.log('[demo:umd] UMD demo (stub):    %s?stub=1', url);
+  console.log('[demo:umd] UMD demo:           %s', url);
   console.log('[demo:umd] press Ctrl+C to stop.');
 });

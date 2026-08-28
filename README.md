@@ -57,7 +57,7 @@ Only `apiUrl` is required at the type level; `user` is optional — when omitted
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `apiUrl` | `string` | — | **Required.** Base URL of the annotations API, e.g. `https://api.example.com/api/v1`. Must be an absolute URL. |
-| `apiKey` | `string` | — | **Required for the hosted webdots server** (sent as the `x-api-key` header on every request). Omit only for a stub/demo or a self-hosted backend with `REQUIRE_API_KEY` disabled. See [Authentication](#authentication). |
+| `apiKey` | `string` | — | **Required for the hosted webdots server** (sent as the `x-api-key` header on every request). Omit only for a custom `config.api` backend or a self-hosted backend with `REQUIRE_API_KEY` disabled. See [Authentication](#authentication). |
 | `user` | `{ name: string; email?: string }` | — | Reviewer identity for annotation attribution. **Optional.** Omit it to mount the magic-link sign-in panel (see [Reviewer sign-in](#reviewer-sign-in)); pass it only to skip the panel when the embedder already knows the reviewer and a session is not used — it is now an **anonymous-mode fallback** (see [Deriving author identity from the session](#deriving-author-identity-from-the-session)). Supplying it alongside an active session is deprecated and logs a warning. |
 | `pageKey` | `string \| (url: URL) => string` | `origin + pathname` | How annotations are scoped to a page. The default drops query string and hash so `?utm_source=…` doesn't create a separate bucket. Resolved **once** at `init()`. |
 | `autoLoad` | `boolean` | `true` | Fetch and render existing annotations on init. |
@@ -239,7 +239,7 @@ const handle = init({
 });
 ```
 
-`apiKey` stays **optional in the types** so the stub/demo, a custom `config.api` backend, and a self-hosted server with `REQUIRE_API_KEY` disabled keep working without a key.
+`apiKey` stays **optional in the types** so a custom `config.api` backend and a self-hosted server with `REQUIRE_API_KEY` disabled keep working without a key.
 
 #### Reviewer sessions (JWT)
 
@@ -335,16 +335,16 @@ The demo pages are deliberately hostile — aggressive global `!important` reset
 | `npm run dev` | `demo/index.html` | `import { init } from '../src/index'` (Vite, source) |
 | `npm run demo:umd` | `demo/umd.html` | `<script src="../dist/webdots.umd.js">` then `window.Webdots.init` (the built UMD bundle — the primary distribution mode) |
 
-`npm run demo:umd` runs `npm run build` first (the bundle is gitignored and only exists after a build), then starts a zero-dependency static server ([`scripts/serve-demo.mjs`](./scripts/serve-demo.mjs)) rooted at the repo root so the page can reach `dist/webdots.umd.js`. Open `http://localhost:4173/demo/umd.html`; append `?stub=1` to run against an in-memory stub instead of a real server.
+`npm run demo:umd` runs `npm run build` first (the bundle is gitignored and only exists after a build), then starts a zero-dependency static server ([`scripts/serve-demo.mjs`](./scripts/serve-demo.mjs)) rooted at the repo root so the page can reach `dist/webdots.umd.js`. Open `http://localhost:4173/demo/umd.html`.
 
-### Stub vs live mode
+### Live mode setup
 
-Both demos default to a **stub** mode that runs against an in-memory `AnnotationAPI` — no backend required. Switch to **live** mode to talk to a real `webdots` server:
+Both demos always talk to a real `webdots` server — there is no stub/mock fallback. The `api` and `user` config overrides are omitted, so the default `HttpAnnotationAPI` transport is used and the magic-link sign-in panel mounts — the reviewer signs in to establish a session.
 
-- **Source demo** (`npm run dev`): append `?mode=live` to the URL, or set `VITE_WEBDOTS_MODE=live` in `.env` (see [`.env.example`](./.env.example)). In live mode the `api` and `user` overrides are dropped, so the default `HttpAnnotationAPI` transport is used and the magic-link sign-in panel mounts — the reviewer signs in to establish a session. `VITE_WEBDOTS_API_URL` is required; `VITE_WEBDOTS_API_KEY` is required for the hosted server.
-- **UMD demo** (`npm run demo:umd`): edit the `API_URL` / `API_KEY` constants at the top of the inline `<script>` in `demo/umd.html`; append `?stub=1` to fall back to the stub.
+- **Source demo** (`npm run dev`): set `VITE_WEBDOTS_API_URL` (and `VITE_WEBDOTS_API_KEY` for the hosted server) in `.env` (see [`.env.example`](./.env.example)).
+- **UMD demo** (`npm run demo:umd`): edit the `API_URL` / `API_KEY` constants at the top of the inline `<script>` in `demo/umd.html`.
 
-To run live mode against a local server: start `webdots` locally, add the demo's origin (e.g. `http://localhost:5173`) to the server's `devOrigins`, and ensure CORS allows `x-api-key` and `Authorization` (see [CORS](#cors)).
+To run against a local server: start `webdots` locally, add the demo's origin (e.g. `http://localhost:5173`) to the server's `devOrigins`, and ensure CORS allows `x-api-key` and `Authorization` (see [CORS](#cors)).
 
 ## License
 

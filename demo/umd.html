@@ -11,9 +11,7 @@
     npm run demo:umd        # builds, then serves repo root on :4173
   then open http://localhost:4173/demo/umd.html
 
-  By default it points at a real webdots server (see API_URL/API_KEY below).
-  Append ?stub=1 to run against an in-memory stub instead — useful for an
-  offline bundle smoke-test when no server is running.
+  Points at a real webdots server — see API_URL/API_KEY below.
 -->
 <html lang="en">
   <head>
@@ -247,18 +245,14 @@
         // Embedder configuration. In a real embed these are the only values you
         // touch. Set API_URL to your webdots server and API_KEY to your project
         // key (required for the hosted server; omit for a self-hosted server with
-        // REQUIRE_API_KEY disabled). Append ?stub=1 to the page URL to swap in an
-        // in-memory stub API instead — handy for an offline bundle smoke-test.
+        // REQUIRE_API_KEY disabled).
         // ---------------------------------------------------------------------------
         var API_URL = 'http://localhost:3000/api/v1';
         var API_KEY = null; // e.g. 'wd_live_xxxxxxxx' for the hosted server
-        var USE_STUB = new URLSearchParams(location.search).get('stub') === '1';
 
         var badge = document.getElementById('mode-badge');
-        badge.textContent = USE_STUB ? 'UMD · stub' : 'UMD · live';
-        badge.title = USE_STUB
-          ? 'In-memory stub API — no backend.'
-          : 'Pointing at ' + API_URL + '. Start webdots locally and add this origin to devOrigins.';
+        badge.textContent = 'UMD · live';
+        badge.title = 'Pointing at ' + API_URL + '. Start webdots locally and add this origin to devOrigins.';
 
         // ---------------------------------------------------------------------------
         // Opt-in screenshot capture (#8). The library ships no rasterizer (bundle
@@ -294,102 +288,16 @@
         }
 
         // ---------------------------------------------------------------------------
-        // Compact in-memory stub AnnotationAPI — mirrors demo/main.ts so ?stub=1
-        // works with no server running. Only loaded when ?stub=1 is present.
+        // init(). `user` is omitted so the magic-link sign-in panel mounts — the
+        // most faithful end-to-end exercise of the auth flow against a real server.
         // ---------------------------------------------------------------------------
-        function createStubApi() {
-          var rows = {};
-          var counter = 0;
-          function clone(a) { return Object.assign({}, a); }
-          return {
-            list: function (query) {
-              var all = Object.keys(rows).map(function (k) { return rows[k]; });
-              if (query.pageUrl) all = all.filter(function (a) { return a.pageUrl === query.pageUrl; });
-              if (query.status) all = all.filter(function (a) { return a.status === query.status; });
-              if (query.priority) all = all.filter(function (a) { return a.priority === query.priority; });
-              return Promise.resolve(all.map(clone));
-            },
-            get: function (id) {
-              var f = rows[id];
-              return f ? Promise.resolve(clone(f)) : Promise.reject(new Error('[umd stub] not found: ' + id));
-            },
-            create: function (input) {
-              counter += 1;
-              var now = new Date().toISOString();
-              var a = {
-                id: 'stub_' + counter,
-                pageUrl: input.pageUrl,
-                selector: input.selector,
-                x: input.x,
-                y: input.y,
-                anchor: input.anchor,
-                title: input.title,
-                description: input.description,
-                status: 'OPEN',
-                priority: input.priority || 'MEDIUM',
-                authorName: input.authorName || 'Anonymous',
-                authorEmail: input.authorEmail,
-                screenshot: null,
-                resolvedAt: null,
-                createdAt: now,
-                updatedAt: now,
-              };
-              rows[a.id] = a;
-              return Promise.resolve(clone(a));
-            },
-            update: function (id, input) {
-              var e = rows[id];
-              if (!e) return Promise.reject(new Error('[umd stub] not found: ' + id));
-              var u = Object.assign({}, e, input, { updatedAt: new Date().toISOString() });
-              rows[id] = u;
-              return Promise.resolve(clone(u));
-            },
-            changeStatus: function (id, status) {
-              var e = rows[id];
-              if (!e) return Promise.reject(new Error('[umd stub] not found: ' + id));
-              var u = Object.assign({}, e, {
-                status: status,
-                resolvedAt: status === 'RESOLVED' ? new Date().toISOString() : null,
-                updatedAt: new Date().toISOString(),
-              });
-              rows[id] = u;
-              return Promise.resolve(clone(u));
-            },
-            remove: function (id) { delete rows[id]; return Promise.resolve(); },
-            uploadScreenshot: function (id, data) {
-              var e = rows[id];
-              if (!e) return Promise.reject(new Error('[umd stub] not found: ' + id));
-              var u = Object.assign({}, e, { screenshot: data, updatedAt: new Date().toISOString() });
-              rows[id] = u;
-              return Promise.resolve(clone(u));
-            },
-          };
-        }
-
-        // ---------------------------------------------------------------------------
-        // init(). `user` is omitted in live mode so the magic-link sign-in panel
-        // mounts (the most faithful end-to-end exercise of the auth flow); in stub
-        // mode a demo user is supplied to jump straight into annotation mode.
-        // ---------------------------------------------------------------------------
-        var config;
-        if (USE_STUB) {
-          config = {
-            apiUrl: API_URL,
-            user: { name: 'Demo QA', email: 'qa@example.com' },
-            debug: true,
-            api: createStubApi(),
-            captureScreenshot: captureScreenshot,
-          };
-          window.__webdotsApi = config.api; // console poking
-        } else {
-          config = {
-            apiUrl: API_URL,
-            apiKey: API_KEY || undefined,
-            debug: true,
-            captureScreenshot: captureScreenshot,
-            // no `user` -> magic-link sign-in panel mounts; reviewer signs in
-          };
-        }
+        var config = {
+          apiUrl: API_URL,
+          apiKey: API_KEY || undefined,
+          debug: true,
+          captureScreenshot: captureScreenshot,
+          // no `user` -> magic-link sign-in panel mounts; reviewer signs in
+        };
 
         var handle = window.Webdots.init(config);
         window.__webdots = handle; // console poking: window.__webdots.setMode('annotate')
