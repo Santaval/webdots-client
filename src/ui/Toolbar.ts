@@ -5,6 +5,14 @@ import type { WidgetMode } from '../core/types';
 export interface ToolbarOptions {
   bus: EventBus;
   initialMode: WidgetMode;
+  /**
+   * Issue #19: whether a reviewer session already exists at construction
+   * time — mirrors the `initialMode` pattern exactly (a snapshot handed in
+   * once, then kept current via a `state:*` subscription). Widget passes
+   * `hasUser()`: true for an embedder-supplied `config.user` or a restored
+   * session, false when the reviewer hasn't signed in yet.
+   */
+  initialSignedIn: boolean;
 }
 
 interface UnplacedAnnotation {
@@ -41,6 +49,7 @@ export class Toolbar {
   private unplacedListEl: HTMLUListElement;
   private bus: EventBus;
   private mode: WidgetMode;
+  private signedIn: boolean;
   private count = 0;
   private unplaced: UnplacedAnnotation[] = [];
   private unplacedOpen = false;
@@ -60,6 +69,7 @@ export class Toolbar {
   constructor(options: ToolbarOptions) {
     this.bus = options.bus;
     this.mode = options.initialMode;
+    this.signedIn = options.initialSignedIn;
 
     this.toggleButton = h(
       'button',
@@ -139,9 +149,11 @@ export class Toolbar {
         this.setAnnotationCount(this.count);
       }),
       this.bus.on('state:unplaced-changed', ({ annotations }) => this.applyUnplaced(annotations)),
+      this.bus.on('state:session-changed', ({ signedIn }) => this.applySignedIn(signedIn)),
     );
 
     this.applyMode(this.mode);
+    this.applySignedIn(this.signedIn);
   }
 
   setAnnotationCount(count: number): void {
@@ -152,6 +164,30 @@ export class Toolbar {
     this.mode = mode;
     const active = mode === 'annotate' || mode === 'composing';
     this.toggleButton.setAttribute('aria-pressed', String(active));
+  }
+
+  /**
+   * Issue #19: while signed out, the toggle button reads "Sign in to
+   * annotate" instead of "New annotation" so a reviewer knows what clicking
+   * it will do (open the sign-in panel, not enter annotate mode directly).
+   * Swaps text + `aria-label` only — `applyMode()` owns `aria-pressed`
+   * alone, so the two renderers never fight over the same attribute.
+   */
+  private applySignedIn(signedIn: boolean): void {
+    this.signedIn = signedIn;
+    const label = signedIn ? 'New annotation' : 'Sign in to annotate';
+    this.toggleButton.textContent = label;
+    this.toggleButton.setAttribute('aria-label', label);
+  }
+
+  /**
+   * Returns focus to the toggle button — called by Widget when the reviewer
+   * dismisses the AuthPanel (`intent:close-auth`) without signing in, the
+   * same "focus moves into the surface, Escape returns it" contract this
+   * class already gives the unplaced panel (see `panelKeydownHandler`).
+   */
+  focusToggle(): void {
+    this.toggleButton.focus();
   }
 
   private applyVisibility(visible: boolean): void {

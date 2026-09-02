@@ -52,6 +52,15 @@ export interface WebdotsEvents {
   'intent:verify-magic-link': { code: string };
   /** Cancel/Escape from the panel — Widget returns to the email phase. */
   'intent:cancel-auth': undefined;
+  /**
+   * Dismiss the panel entirely — Escape, the "×" close button, or a
+   * backdrop click. Deliberately distinct from `intent:cancel-auth` (which
+   * means "go back to email entry" and is what the "Use a different email"
+   * back button emits): conflating the two would make the back button close
+   * the panel instead of resetting its surface. Issue #19 — the panel is no
+   * longer mandatory, so it needs a way to go away.
+   */
+  'intent:close-auth': undefined;
   /** "Resend" from the expired-code surface — Widget re-requests a link for the last email. */
   'intent:resend-magic-link': undefined;
 
@@ -88,13 +97,25 @@ export interface WebdotsEvents {
     expired?: boolean;
     session?: MagicLinkSession;
   };
+  /**
+   * Issue #19: lets Toolbar render its signed-out "Sign in to annotate"
+   * label without importing Widget or Store — same bus-only discipline as
+   * `state:unplaced-changed`. Deliberately NOT `state:auth-state-changed`:
+   * that carries the panel's `AuthPhase` (email/requesting/code-sent/…),
+   * which Toolbar has no business knowing about; this carries only the one
+   * fact it needs, "is there a reviewer right now."
+   */
+  'state:session-changed': { signedIn: boolean };
 }
 
 /**
- * The AuthPanel's lifecycle states. `'idle'` is the Widget's pre-panel value
- * (no auth flow running); the panel mounts into `'email'` and Widget drives
- * it through `'requesting'` -> `'code-sent'` -> `'verifying'` ->
- * `'verified'` as the flow progresses. Failures are NOT a separate phase:
+ * The AuthPanel's lifecycle states. `'idle'` means no panel is mounted —
+ * the Widget's value before the reviewer has ever asked to sign in, AND
+ * (issue #19) what it emits when the panel is dismissed (Escape, the "×",
+ * or a backdrop click) without completing the flow. The panel itself mounts
+ * only into `'email'`, and Widget drives it through `'requesting'` ->
+ * `'code-sent'` -> `'verifying'` -> `'verified'` as the flow progresses.
+ * Failures are NOT a separate phase:
  * the panel re-renders the surface the failure occurred on (`'email'` or
  * `'code-sent'`) with an `error`/`expired` companion on the same event, so
  * the user stays in context — a rejected `requestMagicLink` returns to the

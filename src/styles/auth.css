@@ -6,11 +6,13 @@
  * the panel shell and the state-specific surfaces (loading / error /
  * expired / success) live here.
  *
- * Same "full-viewport layer, pointer-events:none on the shell, only the
- * card opts back in" pattern as Toast/Overlay, except the backdrop also
- * opts in so it can focus attention during the mandatory sign-in step
- * (annotate mode is gated until a reviewer verifies, so there's nothing
- * else to interact with anyway).
+ * Issue #19: this is no longer forced on the page by default — it mounts
+ * only when the reviewer presses the toolbar's "Sign in to annotate" button
+ * (or a programmatic `setMode('annotate')`), and can be dismissed (Escape,
+ * the "×", or a backdrop click) without signing in. `pointer-events: auto`
+ * on the backdrop stays, though: it's still a modal once opened, just one
+ * the reviewer opened on purpose and can close, not one that blocks the
+ * page unasked.
  */
 .wd-auth {
   all: initial;
@@ -31,6 +33,7 @@
 
 .wd-auth__card {
   box-sizing: border-box;
+  position: relative; /* anchors .wd-auth__close to the card's own corner */
   width: 320px;
   max-width: 100%;
   background: var(--wd-color-bg);
@@ -38,6 +41,37 @@
   border-radius: var(--wd-radius-md);
   box-shadow: var(--wd-shadow-toolbar);
   padding: var(--wd-space-4);
+}
+
+/* Issue #19: the dismiss affordance. Same shape as .wd-card__close
+   (AnnotationCard) but positioned absolutely — the card has no shared
+   header row to sit in, since only one of the two titles is visible at
+   a time depending on phase. */
+.wd-auth__close {
+  all: unset;
+  box-sizing: border-box;
+  position: absolute;
+  top: var(--wd-space-2);
+  right: var(--wd-space-2);
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--wd-radius-sm);
+  cursor: pointer;
+  color: var(--wd-color-text-muted);
+  line-height: 1;
+}
+
+.wd-auth__close:hover {
+  background: var(--wd-color-bg-elevated);
+  color: var(--wd-color-text);
+}
+
+.wd-auth__close:focus-visible {
+  outline: 2px solid var(--wd-color-accent);
+  outline-offset: 1px;
 }
 
 .wd-auth__title {

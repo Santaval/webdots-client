@@ -96,6 +96,19 @@ function clickPin(root: ShadowRoot, id: string): void {
   click(pin);
 }
 
+/**
+ * Clicks the toolbar's mode-toggle button — the first `.wd-toolbar__button`
+ * in document order (the refresh button shares the class but comes after
+ * it). Issue #19: while signed out this is what OPENS the AuthPanel (it no
+ * longer mounts at init), so most auth tests now drive this before touching
+ * the panel's own form controls.
+ */
+function toggleAnnotateMode(root: ShadowRoot): void {
+  const button = root.querySelector('.wd-toolbar__button');
+  if (!button) throw new Error('toolbar toggle button not found');
+  click(button);
+}
+
 describe('Widget pin interactions (M4)', () => {
   afterEach(() => {
     destroy();
@@ -546,16 +559,22 @@ describe('Widget reviewer auth — magic link (M3, issue #4)', () => {
     );
   }
 
-  it('mounts the AuthPanel and gates annotate mode when no user is supplied', async () => {
+  // Issue #19: the widget no longer enforces login by mounting the panel at
+  // init — it mounts only once the reviewer asks to annotate.
+  it('mounts no AuthPanel at init with no user supplied; toggling annotate mode opens it', async () => {
     const api = makeStubApi();
     const authApi = makeStubAuthApi();
     const { handle, root } = await mount(api, { user: undefined, authApi });
 
+    expect(root.querySelector('.wd-auth')).toBeNull();
+    expect(handle.getMode()).toBe('idle');
+
+    // The toolbar's "Sign in to annotate" toggle is what opens the panel.
+    toggleAnnotateMode(root);
     expect(root.querySelector('.wd-auth')).not.toBeNull();
 
-    // Annotate mode is gated until the reviewer signs in: a programmatic
-    // setMode('annotate') is a no-op rather than entering annotate.
-    handle.setMode('annotate');
+    // Mode itself stays idle — a reviewer must still complete sign-in
+    // before annotate mode is actually entered.
     expect(handle.getMode()).toBe('idle');
   });
 
@@ -567,13 +586,18 @@ describe('Widget reviewer auth — magic link (M3, issue #4)', () => {
   });
 
   // Issue #4 acceptance: the happy path.
-  it('happy path: email -> code -> verified unmounts the panel, enables annotate, and runs the deferred autoLoad', async () => {
+  it('happy path: email -> code -> verified unmounts the panel, resumes annotate mode, and runs the deferred autoLoad', async () => {
     const api = makeStubApi([makeAnnotation()]);
     const authApi = makeStubAuthApi();
     const { handle, root } = await mount(api, { user: undefined, authApi });
 
     // autoLoad was deferred (no user at init), so list() has NOT been called yet.
     expect(api.list).not.toHaveBeenCalled();
+    expect(root.querySelector('.wd-auth')).toBeNull(); // #19: no panel at init
+
+    // The reviewer asks to annotate — this is what opens the panel now.
+    toggleAnnotateMode(root);
+    expect(root.querySelector('.wd-auth')).not.toBeNull();
 
     // Email entry.
     fillAuthEmail(root, 'ada@example.com');
@@ -591,8 +615,9 @@ describe('Widget reviewer auth — magic link (M3, issue #4)', () => {
     // The panel unmounts on success.
     expect(root.querySelector('.wd-auth')).toBeNull();
 
-    // Annotate is now un-gated.
-    handle.setMode('annotate');
+    // #19: the toggle click that opened the panel is resumed automatically
+    // once sign-in completes — annotate mode is entered without a second
+    // setMode('annotate') call, so the original click isn't lost.
     expect(handle.getMode()).toBe('annotate');
 
     // The deferred autoLoad now runs (attribution identity is established).
@@ -606,6 +631,7 @@ describe('Widget reviewer auth — magic link (M3, issue #4)', () => {
     authApi.verifyMagicLink.mockRejectedValueOnce(new ExpiredCodeError(410, 'https://api.example.com/api/v1/auth/magic-link/verify'));
 
     const { handle, root } = await mount(api, { user: undefined, authApi });
+    toggleAnnotateMode(root); // #19: open the panel — it's no longer mounted at init
 
     fillAuthEmail(root, 'ada@example.com');
     submitAuthEmail(root);
@@ -622,6 +648,115 @@ describe('Widget reviewer auth — magic link (M3, issue #4)', () => {
     // Annotate remains gated (no user was established).
     handle.setMode('annotate');
     expect(handle.getMode()).toBe('idle');
+  });
+});
+
+// Issue #19: "Only show login modal when user ask for add annotation, not
+// show it blocking the page by default." Covers the behavior change itself
+// (nothing above already nails down): mount-on-demand, the resumed
+// annotate intent, dismissal, and the disposables-growth fix that
+// mount-on-demand made possible to hit (mounting repeatedly, where M3-era
+// code only ever mounted once per page).
+describe('Widget reviewer auth — issue #19 (prompt only on demand)', () => {
+  afterEach(() => {
+    destroy();
+    document.body.innerHTML = '';
+    localStorage.clear();
+    vi.restoreAllMocks();
+  });
+
+  function fillAuthEmail(root: ShadowRoot, email: string): void {
+    (root.querySelector('[aria-label="Email address"]') as HTMLInputElement).value = email;
+  }
+  function submitAuthEmail(root: ShadowRoot): void {
+    (root.querySelector('.wd-auth__form') as HTMLFormElement).dispatchEvent(
+      new Event('submit', { bubbles: true, cancelable: true }),
+    );
+  }
+  function fillAuthCode(root: ShadowRoot, code: string): void {
+    (root.querySelector('[aria-label="Sign-in code"]') as HTMLInputElement).value = code;
+  }
+  function submitAuthCode(root: ShadowRoot): void {
+    const forms = root.querySelectorAll('.wd-auth__form');
+    (forms[forms.length - 1] as HTMLFormElement).dispatchEvent(
+      new Event('submit', { bubbles: true, cancelable: true }),
+    );
+  }
+
+  it('init() with no user and no session mounts no panel and leaves the page unblocked', async () => {
+    const api = makeStubApi();
+    const { handle, root } = await mount(api, { user: undefined });
+
+    expect(root.querySelector('.wd-auth')).toBeNull();
+    expect(handle.getMode()).toBe('idle');
+
+    // Nothing in the shadow root claims the viewport the way the old
+    // always-mounted backdrop did — a click on the host page reaches the
+    // host page's own listener rather than being swallowed.
+    const hostButton = document.createElement('button');
+    document.body.appendChild(hostButton);
+    const hostClick = vi.fn();
+    hostButton.addEventListener('click', hostClick);
+    hostButton.click();
+    expect(hostClick).toHaveBeenCalledTimes(1);
+    hostButton.remove();
+  });
+
+  it('emitting intent:toggle-mode while signed out mounts the panel; mode stays idle', async () => {
+    const api = makeStubApi();
+    const { handle, root } = await mount(api, { user: undefined });
+
+    toggleAnnotateMode(root);
+
+    expect(root.querySelector('.wd-auth')).not.toBeNull();
+    expect(handle.getMode()).toBe('idle'); // signing in is still required to actually enter annotate
+  });
+
+  it('signing in after a toggle-triggered prompt lands in annotate mode (the resumed intent)', async () => {
+    const api = makeStubApi();
+    const authApi = makeStubAuthApi();
+    const { handle, root } = await mount(api, { user: undefined, authApi });
+
+    toggleAnnotateMode(root);
+    fillAuthEmail(root, 'ada@example.com');
+    submitAuthEmail(root);
+    await flush();
+    fillAuthCode(root, 'ABC123');
+    submitAuthCode(root);
+    await flush();
+
+    // The click that opened the panel wasn't lost — it resumes into
+    // annotate mode automatically, with no further setMode call.
+    expect(handle.getMode()).toBe('annotate');
+  });
+
+  it('intent:close-auth dismisses the panel, mode stays idle, and a later toggle re-opens it', async () => {
+    const api = makeStubApi();
+    const { handle, root } = await mount(api, { user: undefined });
+
+    toggleAnnotateMode(root);
+    expect(root.querySelector('.wd-auth')).not.toBeNull();
+
+    click(root.querySelector('.wd-auth__close')!);
+
+    expect(root.querySelector('.wd-auth')).toBeNull();
+    expect(handle.getMode()).toBe('idle');
+
+    // A reviewer who backed out and changes their mind can still get back in.
+    toggleAnnotateMode(root);
+    expect(root.querySelector('.wd-auth')).not.toBeNull();
+  });
+
+  it('repeated open/close does not accumulate .wd-auth nodes (guards the disposables fix)', async () => {
+    const api = makeStubApi();
+    const { root } = await mount(api, { user: undefined });
+
+    for (let i = 0; i < 5; i++) {
+      toggleAnnotateMode(root);
+      expect(root.querySelectorAll('.wd-auth')).toHaveLength(1);
+      click(root.querySelector('.wd-auth__close')!);
+      expect(root.querySelectorAll('.wd-auth')).toHaveLength(0);
+    }
   });
 });
 
@@ -677,6 +812,7 @@ describe('Widget JWT session (M3, issue #5)', () => {
     const api = makeStubApi();
     const authApi = makeStubAuthApi(storedSession);
     const { root } = await mount(api, { user: undefined, authApi });
+    toggleAnnotateMode(root); // #19: open the panel — it's no longer mounted at init
 
     expect(loadSession(API_URL)).toBeNull(); // nothing persisted yet
 

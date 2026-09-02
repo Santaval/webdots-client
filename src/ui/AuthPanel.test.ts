@@ -189,15 +189,51 @@ describe('AuthPanel', () => {
     expect(cancel).toHaveBeenCalledTimes(1);
   });
 
-  it('Escape on the card emits intent:cancel-auth', () => {
+  // Issue #19: Escape now DISMISSES the panel entirely, rather than
+  // resetting to email entry — that reset is what "Use a different email"
+  // (tested above) still does, and is a distinct intent (`intent:cancel-auth`).
+  it('Escape on the card emits intent:close-auth', () => {
     const bus = new EventBus();
-    const cancel = vi.fn();
-    bus.on('intent:cancel-auth', cancel);
+    const close = vi.fn();
+    bus.on('intent:close-auth', close);
     const panel = new AuthPanel({ bus });
 
     keydown(panel.el.querySelector('.wd-auth__card')!, 'Escape');
 
-    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it('the "×" close button emits intent:close-auth', () => {
+    const bus = new EventBus();
+    const close = vi.fn();
+    bus.on('intent:close-auth', close);
+    const panel = new AuthPanel({ bus });
+
+    click(panel.el.querySelector('.wd-auth__close')!);
+
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it('clicking the backdrop (outside the card) emits intent:close-auth', () => {
+    const bus = new EventBus();
+    const close = vi.fn();
+    bus.on('intent:close-auth', close);
+    const panel = new AuthPanel({ bus });
+
+    click(panel.el); // the backdrop itself, not a descendant
+
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it('clicking inside the card does NOT emit intent:close-auth (the click bubbles to the backdrop but did not originate there)', () => {
+    const bus = new EventBus();
+    const close = vi.fn();
+    bus.on('intent:close-auth', close);
+    const panel = new AuthPanel({ bus });
+
+    click(panel.el.querySelector('.wd-auth__card')!);
+
+    expect(close).not.toHaveBeenCalled();
   });
 
   it('the dialog is aria-modal and labelled by the active title', () => {

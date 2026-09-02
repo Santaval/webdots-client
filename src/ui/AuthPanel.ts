@@ -12,10 +12,10 @@ export interface AuthPanelOptions {
  * like Popover). Per the "no UI module imports another UI module" rule,
  * AuthPanel only ever talks to the EventBus: it emits
  * `intent:request-magic-link` / `intent:verify-magic-link` /
- * `intent:cancel-auth` / `intent:resend-magic-link` and reacts to
- * `state:auth-state-changed` to re-render. It has no idea what an AuthAPI,
- * a token, or a Widget is — Widget combines the submitted email/code with
- * the API calls and emits the resulting phase back.
+ * `intent:cancel-auth` / `intent:close-auth` / `intent:resend-magic-link`
+ * and reacts to `state:auth-state-changed` to re-render. It has no idea
+ * what an AuthAPI, a token, or a Widget is — Widget combines the submitted
+ * email/code with the API calls and emits the resulting phase back.
  *
  * The two surfaces (email entry, code entry) are both built up front and
  * toggled by `data-phase` on the card; rebuilding on every phase change
@@ -27,9 +27,17 @@ export interface AuthPanelOptions {
  * error for the dedicated expired-code surface plus a "Resend" action that
  * emits `intent:resend-magic-link`.
  *
+ * Issue #19 — dismissal: the panel is opened deliberately (the toolbar's
+ * "Sign in to annotate" button, or a programmatic `setMode('annotate')`),
+ * not forced on load, so it must also be closeable. Three paths all emit
+ * `intent:close-auth` — Escape, the "×" button, and a click on the backdrop
+ * itself (not one that bubbled out of the card) — and are kept distinct
+ * from `intent:cancel-auth` ("Use a different email", which only resets the
+ * surface back to email entry rather than closing anything).
+ *
  * A11y: `role="dialog"` + `aria-modal="true"` + an `aria-labelledby` the
  * active title; focus moves into the active input on mount and on each
- * surface transition; Escape emits `intent:cancel-auth`. Never uses
+ * surface transition; Escape emits `intent:close-auth`. Never uses
  * `innerHTML` — every node is `createElement`/`textContent`, so an
  * attacker-controlled error message (or a hostile host page) can never be
  * interpreted as markup.
@@ -57,11 +65,12 @@ export class AuthPanel {
   private expiredEl: HTMLParagraphElement;
   private resendButton: HTMLButtonElement;
   private successView: HTMLDivElement;
+  private closeButton: HTMLButtonElement;
 
   private keydownHandler = (event: KeyboardEvent) => {
     if (event.key === 'Escape') {
       event.stopPropagation();
-      this.bus.emit('intent:cancel-auth', undefined);
+      this.bus.emit('intent:close-auth', undefined);
     }
   };
 
@@ -154,6 +163,22 @@ export class AuthPanel {
     this.expiredEl = h('p', { className: 'wd-auth__expired', role: 'alert', hidden: true }, 'That sign-in code has expired or is invalid.');
     this.successView = h('div', { className: 'wd-auth__success-view' }, h('p', { className: 'wd-auth__success' }, 'Signed in — loading annotations…'));
 
+    // Issue #19: the panel is no longer mandatory, so it needs a visible way
+    // to go away. Same close-button shape as AnnotationCard's (`×`,
+    // `aria-label`, `data-wd-action`) but its own class since it sits over
+    // the card rather than in a `.wd-card__header` row.
+    this.closeButton = h(
+      'button',
+      {
+        type: 'button',
+        className: 'wd-auth__close',
+        'aria-label': 'Close sign-in',
+        'data-wd-action': 'close',
+        onclick: () => this.bus.emit('intent:close-auth', undefined),
+      },
+      '×',
+    );
+
     this.card = h(
       'div',
       {
@@ -164,6 +189,7 @@ export class AuthPanel {
         tabindex: '-1',
         onkeydown: this.keydownHandler,
       },
+      this.closeButton,
       this.emailTitle,
       this.emailSubtitle,
       this.emailView,
@@ -178,7 +204,20 @@ export class AuthPanel {
     this.emailTitle.id = 'wd-auth-title-email';
     this.codeTitle.id = 'wd-auth-title-code';
 
-    this.el = h('div', { className: 'wd-auth' }, this.card);
+    // Backdrop click dismisses — but only a click that actually landed on
+    // the backdrop itself (`event.target === this.el`), not one that
+    // bubbled up from inside the card. Without that check, any click
+    // anywhere in the card (which bubbles through `this.el`) would close it.
+    this.el = h(
+      'div',
+      {
+        className: 'wd-auth',
+        onclick: (event: MouseEvent) => {
+          if (event.target === this.el) this.bus.emit('intent:close-auth', undefined);
+        },
+      },
+      this.card,
+    );
 
     this.unsubscribers.push(
       this.bus.on('state:auth-state-changed', (state) => this.applyState(state)),

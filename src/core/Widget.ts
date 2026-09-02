@@ -120,23 +120,41 @@ export class Widget implements WidgetHandle {
   private toast: Toast;
 
   // ---- M3 reviewer auth ------------------------------------------------
-  // The magic-link sign-in panel. Mounted only when `config.user` is absent
-  // (an embedder who already knows the reviewer passes `user` and skips the
-  // panel). Once `verifyMagicLink` succeeds, the session's `user` is written
-  // back into `config.user`, the panel unmounts, and annotate mode is
-  // un-gated. `lastAuthEmail` backs the "Resend" intent (re-request a link
-  // for the email the reviewer already entered) without the panel having to
-  // hold that state itself.
+  // The magic-link sign-in panel. Issue #19: mounted on demand, not at
+  // init — `promptSignIn()` is the only thing that mounts it, called from
+  // `handleToggleMode()` and the public `setMode()` when the reviewer asks
+  // to annotate without a session. An embedder who already knows the
+  // reviewer passes `user` and skips it entirely. Once `verifyMagicLink`
+  // succeeds, the session's `user` is written back into `config.user`, the
+  // panel unmounts, and annotate mode is un-gated. `lastAuthEmail` backs the
+  // "Resend" intent (re-request a link for the email the reviewer already
+  // entered) without the panel having to hold that state itself.
   //
   // #5 (JWT session): the live token lives in `sessionToken`, read by the
   // default `HttpAnnotationAPI`'s `getToken` so annotation requests carry
   // `Authorization: Bearer`. On reload a stored session is restored from
   // localStorage (no re-prompt) until the next request 401s, at which point
   // `expireSession()` clears the token + storage, revokes `config.user`, and
-  // re-mounts the panel — the "expiry re-prompts without a page reload" path.
+  // re-mounts the panel — the "expiry re-prompts without a page reload" path
+  // (this immediate re-prompt on expiry is unchanged by #19: that 401 always
+  // follows an action the reviewer just took, so it's never an unprompted
+  // interruption the way mounting at init was).
   // A token-present 401 is therefore distinct from a no-token 401 (the
   // latter is an x-api-key failure surfaced via the normal error channel).
   private authPanel: AuthPanel | null = null;
+  /**
+   * Issue #19: set by `promptSignIn()` when the panel mounts because the
+   * reviewer clicked the annotate toggle (as opposed to, say, a bare
+   * `promptSignIn()` call with no intent behind it — there isn't one today,
+   * but the flag keeps the "what happens after sign-in" decision explicit
+   * rather than implicit in "a panel happened to be open"). Consumed by
+   * `finishAuth()` (resume into annotate mode) and set again by
+   * `expireSession()` when the mode it's tearing down was annotate/composing
+   * (so re-signing-in returns the reviewer to where they were, not `idle`).
+   * Cleared by `handleCloseAuth()` — a reviewer who dismisses the panel
+   * clearly does not want to land in annotate mode once they DO sign in.
+   */
+  private pendingAnnotateIntent = false;
   private lastAuthEmail = '';
   private sessionToken: string | undefined;
   /**
@@ -241,7 +259,10 @@ export class Widget implements WidgetHandle {
     this.shadowHost.shadowRoot.appendChild(this.highlighter.el);
     this.disposables.add(() => this.highlighter.dispose());
 
-    this.toolbar = new Toolbar({ bus: this.bus, initialMode: this.store.getMode() });
+    // `initialSignedIn` only sees the embedder-supplied-`config.user` case
+    // here — the stored-session restore below runs AFTER this and updates
+    // the Toolbar via the `state:session-changed` emit that follows it.
+    this.toolbar = new Toolbar({ bus: this.bus, initialMode: this.store.getMode(), initialSignedIn: this.hasUser() });
     this.shadowHost.shadowRoot.appendChild(this.toolbar.el);
     this.disposables.add(() => this.toolbar.dispose());
 
@@ -252,10 +273,22 @@ export class Widget implements WidgetHandle {
     this.shadowHost.shadowRoot.appendChild(this.toast.el);
     this.disposables.add(() => this.toast.dispose());
 
-    // M3: reviewer magic-link sign-in. The panel is the runtime path to
-    // ESTABLISHING a reviewer identity when neither an embedder-supplied
-    // `user` nor a stored session exists at init. An embedder who already
-    // knows the reviewer passes `user` and skips the panel entirely.
+    // Issue #19: the AuthPanel now mounts/unmounts on demand (potentially
+    // many times per page — open, dismiss, re-open) rather than once at
+    // init, so this disposable is registered ONCE here rather than inside
+    // `mountAuthPanel()` on every mount. It reads `this.authPanel` at
+    // dispose time, so this single registration covers every future panel;
+    // registering it per-mount (the M3-era shape) would have grown
+    // `disposables` without bound.
+    this.disposables.add(() => this.authPanel?.dispose());
+
+    // M3: reviewer magic-link sign-in. Issue #19 — the panel is NOT mounted
+    // here. It mounts only when the reviewer actually asks to annotate (the
+    // toolbar's "Sign in to annotate" button, or a programmatic
+    // `setMode('annotate')`) via `promptSignIn()`, so an embedder can drop
+    // the widget onto a page without blocking it for anyone who never
+    // touches the annotate button. An embedder who already knows the
+    // reviewer passes `user` and skips the panel entirely regardless.
     // #5: a session persisted from a PRIOR sign-in (namespaced by apiUrl
     // alone) is restored here — the token survives and annotate stays
     // un-gated, no re-prompt. #18: because the namespace is apiUrl only (not
@@ -268,8 +301,7 @@ export class Widget implements WidgetHandle {
     // fallback only. So a stored session is restored EVEN when `config.user`
     // was supplied (the session user overwrites it, the token attaches), and
     // supplying `config.user` alongside an active session is deprecated: a
-    // one-time warning fires here. With neither a stored session nor a
-    // `user`, the AuthPanel mounts as before.
+    // one-time warning fires here.
     const stored = loadSession(config.apiUrl);
     if (stored) {
       if (config.user) {
@@ -280,9 +312,12 @@ export class Widget implements WidgetHandle {
       this.config.user = { name: stored.user.name, email: stored.user.email };
       this.sessionToken = stored.token;
       this.sessionExpired = false; // a live restored session resets the latch
-    } else if (!config.user) {
-      this.mountAuthPanel();
     }
+    // Reaches the Toolbar (constructed above with only the
+    // embedder-supplied-`user` snapshot) so a restored session flips its
+    // label to "New annotation" without it needing to inspect `config.user`
+    // itself — same intent/state split as everything else here.
+    this.bus.emit('state:session-changed', { signedIn: this.hasUser() });
 
     this.disposables.add(this.bus.on('intent:toggle-mode', () => this.handleToggleMode()));
     this.disposables.add(this.bus.on('intent:refresh', () => void this.refresh()));
@@ -308,6 +343,7 @@ export class Widget implements WidgetHandle {
     this.disposables.add(this.bus.on('intent:request-magic-link', (payload) => void this.handleRequestMagicLink(payload.email)));
     this.disposables.add(this.bus.on('intent:verify-magic-link', (payload) => void this.handleVerifyMagicLink(payload.code)));
     this.disposables.add(this.bus.on('intent:cancel-auth', () => this.handleCancelAuth()));
+    this.disposables.add(this.bus.on('intent:close-auth', () => this.handleCloseAuth()));
     this.disposables.add(this.bus.on('intent:resend-magic-link', () => void this.handleResendMagicLink()));
 
     // Capture-phase so annotate-mode clicks are intercepted BEFORE the host
@@ -382,19 +418,44 @@ export class Widget implements WidgetHandle {
   }
 
   /**
-   * Mounts a fresh AuthPanel into the shadow root at the `email` phase. Shared
-   * by the constructor (no `user` and no stored session) and by
+   * Mounts a fresh AuthPanel into the shadow root at the `email` phase.
+   * Shared by `promptSignIn()` (the reviewer asked to annotate) and
    * `expireSession()` (a previously-established session just lapsed). The
-   * panel's own dispose is registered on `disposables`; re-mounting after
-   * expiry is safe because `expireSession()` nulls `authPanel` (and its old
-   * disposable has already run) before calling here.
+   * panel's dispose is registered ONCE, in the constructor (see the comment
+   * there) — not here, since #19 makes this mount/unmount repeatedly over a
+   * page's lifetime rather than running at most once.
    */
   private mountAuthPanel(): void {
     this.authPanel = new AuthPanel({ bus: this.bus });
     this.shadowHost.shadowRoot.appendChild(this.authPanel.el);
-    this.disposables.add(() => this.authPanel?.dispose());
     this.bus.emit('state:auth-state-changed', { phase: 'email' });
     this.authPanel.focus();
+  }
+
+  /** Disposes and nulls the AuthPanel — shared by `finishAuth()` and `handleCloseAuth()`. */
+  private unmountAuthPanel(): void {
+    this.authPanel?.dispose();
+    this.authPanel = null;
+  }
+
+  /**
+   * Issue #19: the ONLY thing that opens the AuthPanel. Called from
+   * `handleToggleMode()` (toolbar click) and the public `setMode()`
+   * (programmatic `handle.setMode('annotate')`) — never from `init()`.
+   * If a panel is already up (a second toggle click while mid-flow),
+   * just refocuses it rather than tearing down and rebuilding a flow the
+   * reviewer may already be partway through. Otherwise it records that
+   * annotate mode was the reason the panel opened — `finishAuth()` reads
+   * `pendingAnnotateIntent` to resume into annotate mode once sign-in
+   * completes, so the click that asked for annotate mode isn't lost.
+   */
+  private promptSignIn(): void {
+    if (this.authPanel) {
+      this.authPanel.focus();
+      return;
+    }
+    this.pendingAnnotateIntent = true;
+    this.mountAuthPanel();
   }
 
   private async handleRequestMagicLink(email: string): Promise<void> {
@@ -432,6 +493,24 @@ export class Widget implements WidgetHandle {
     this.bus.emit('state:auth-state-changed', { phase: 'email' });
   }
 
+  /**
+   * Issue #19: dismisses the panel WITHOUT signing in — Escape, the "×", or
+   * a backdrop click. Distinct from `handleCancelAuth()` above, which only
+   * resets the surface back to email entry and leaves the panel mounted.
+   * Clears `pendingAnnotateIntent` (a reviewer who backs out clearly isn't
+   * expecting to land in annotate mode on some LATER sign-in), unmounts,
+   * emits the `'idle'` phase so nothing still watching `state:auth-state-changed`
+   * is left thinking a flow is in progress, and returns focus to the
+   * toolbar's toggle button — the button that opened the panel is where a
+   * keyboard user expects to land back.
+   */
+  private handleCloseAuth(): void {
+    this.pendingAnnotateIntent = false;
+    this.unmountAuthPanel();
+    this.bus.emit('state:auth-state-changed', { phase: 'idle' });
+    this.toolbar.focusToggle();
+  }
+
   private async handleResendMagicLink(): Promise<void> {
     if (!this.lastAuthEmail) {
       this.bus.emit('state:auth-state-changed', { phase: 'email' });
@@ -448,16 +527,24 @@ export class Widget implements WidgetHandle {
    * by the annotations transport's `getToken`) and persists it to
    * localStorage — namespaced by `apiUrl` alone (#18) — so the session
    * survives both a reload and navigation to other pages on the same site.
+   * #19: emits `state:session-changed` so the Toolbar's label flips back to
+   * "New annotation", then — if the panel was opened because the reviewer
+   * clicked the annotate toggle (`pendingAnnotateIntent`) — resumes into
+   * annotate mode so that original click isn't lost.
    */
   private finishAuth(session: MagicLinkSession): void {
     this.config.user = { name: session.user.name, email: session.user.email };
     this.sessionToken = session.token;
     this.sessionExpired = false; // a fresh session supersedes any prior expiry latch
     saveSession(this.config.apiUrl, session);
-    this.authPanel?.dispose();
-    this.authPanel = null;
+    this.unmountAuthPanel();
     if (this.config.autoLoad) {
       void this.loadAnnotations();
+    }
+    this.bus.emit('state:session-changed', { signedIn: true });
+    if (this.pendingAnnotateIntent) {
+      this.pendingAnnotateIntent = false;
+      this.setMode('annotate');
     }
     this.log.debug('reviewer authenticated');
   }
@@ -467,7 +554,15 @@ export class Widget implements WidgetHandle {
    * expired server-side). Clears the live token + the persisted session,
    * revokes `config.user` so annotate mode re-gates, closes any open
    * composer/detail surface, snaps mode back to `idle`, and re-opens the
-   * AuthPanel — the "expiry re-prompts without a page reload" path.
+   * AuthPanel — the "expiry re-prompts without a page reload" path. #19
+   * left this immediate re-prompt unchanged: unlike the removed mount-at-init
+   * behavior, this 401 always follows an action the reviewer just took, so
+   * re-opening the panel here isn't an unprompted interruption.
+   *
+   * If the mode being torn down was `annotate`/`composing`, sets
+   * `pendingAnnotateIntent` so `finishAuth()` returns the reviewer to
+   * annotate mode once they re-sign-in, rather than dumping them in `idle`
+   * after an expiry they didn't ask for.
    *
    * IDEMPOTENT: the `if (this.sessionExpired) return` guard means N concurrent
    * in-flight operations that all 401 produce a SINGLE transition — the first
@@ -484,20 +579,25 @@ export class Widget implements WidgetHandle {
     this.sessionToken = undefined;
     clearSession(this.config.apiUrl);
     this.config.user = undefined;
+    const mode = this.getMode();
+    if (mode === 'annotate' || mode === 'composing') this.pendingAnnotateIntent = true;
     // Close any surfaces that presume an authed reviewer, then re-gate mode.
     this.closeComposerUi();
     this.closeDetailUi();
     this.setMode('idle');
+    this.bus.emit('state:session-changed', { signedIn: false });
     this.mountAuthPanel();
     this.log.info('session expired; re-opening sign-in');
   }
 
   private handleToggleMode(): void {
-    // Gated until a reviewer signs in — the AuthPanel's modal backdrop
-    // already blocks toolbar clicks while it's up, but this also covers a
-    // programmatic `setMode('annotate')` that bypasses the panel.
+    // Issue #19: no longer a silent no-op while signed out. The toolbar's
+    // "Sign in to annotate" label (Toolbar's own `applySignedIn()`) already
+    // tells the reviewer what this click does; `promptSignIn()` is what
+    // actually opens the panel, and remembers to resume into annotate mode
+    // once sign-in completes so this click isn't lost.
     if (!this.hasUser()) {
-      this.log.warn('annotate mode is unavailable until the reviewer signs in.');
+      this.promptSignIn();
       return;
     }
     this.setMode(this.getMode() === 'annotate' ? 'idle' : 'annotate');
@@ -1019,10 +1119,15 @@ export class Widget implements WidgetHandle {
 
   setMode(mode: WidgetMode): void {
     // Entering annotate/composing requires a signed-in reviewer for
-    // attribution. `handleToggleMode` already guards the toolbar path; this
-    // guards programmatic callers (e.g. `handle.setMode('annotate')`).
+    // attribution. `handleToggleMode` already covers the toolbar path; this
+    // covers programmatic callers (e.g. `handle.setMode('annotate')`).
+    // Issue #19: rather than a silent no-op, this now opens the sign-in
+    // panel — same `promptSignIn()` as the toolbar click, so a caller who
+    // does `handle.setMode('annotate')` before a reviewer is signed in gets
+    // the same "resume into annotate mode after sign-in" behavior instead
+    // of the call just being dropped.
     if ((mode === 'annotate' || mode === 'composing') && !this.hasUser()) {
-      this.log.warn('setMode: annotate/composing unavailable until the reviewer signs in.');
+      this.promptSignIn();
       return;
     }
     this.store.setMode(mode);

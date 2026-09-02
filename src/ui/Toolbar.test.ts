@@ -13,7 +13,7 @@ function escape(el: Element): void {
 describe('Toolbar "N unplaced" tray', () => {
   it('the unplaced button is hidden when there are no unplaced annotations', () => {
     const bus = new EventBus();
-    const toolbar = new Toolbar({ bus, initialMode: 'idle' });
+    const toolbar = new Toolbar({ bus, initialMode: 'idle', initialSignedIn: true });
 
     const button = toolbar.el.querySelector('.wd-toolbar__unplaced') as HTMLButtonElement;
     expect(button.hidden).toBe(true);
@@ -21,7 +21,7 @@ describe('Toolbar "N unplaced" tray', () => {
 
   it('state:unplaced-changed with a non-empty list reveals the button with the count', () => {
     const bus = new EventBus();
-    const toolbar = new Toolbar({ bus, initialMode: 'idle' });
+    const toolbar = new Toolbar({ bus, initialMode: 'idle', initialSignedIn: true });
 
     bus.emit('state:unplaced-changed', {
       annotations: [
@@ -37,7 +37,7 @@ describe('Toolbar "N unplaced" tray', () => {
 
   it('clicking the button opens a panel listing title + author for each unplaced annotation', () => {
     const bus = new EventBus();
-    const toolbar = new Toolbar({ bus, initialMode: 'idle' });
+    const toolbar = new Toolbar({ bus, initialMode: 'idle', initialSignedIn: true });
 
     bus.emit('state:unplaced-changed', {
       annotations: [{ id: 'a', title: 'Off-screen note', authorName: 'QA One' }],
@@ -57,7 +57,7 @@ describe('Toolbar "N unplaced" tray', () => {
 
   it('clicking the button again closes the panel', () => {
     const bus = new EventBus();
-    const toolbar = new Toolbar({ bus, initialMode: 'idle' });
+    const toolbar = new Toolbar({ bus, initialMode: 'idle', initialSignedIn: true });
     bus.emit('state:unplaced-changed', { annotations: [{ id: 'a', title: 'X', authorName: 'Y' }] });
 
     const button = toolbar.el.querySelector('.wd-toolbar__unplaced') as HTMLButtonElement;
@@ -72,7 +72,7 @@ describe('Toolbar "N unplaced" tray', () => {
 
   it('the list updates in place when state:unplaced-changed fires again while the panel is open', () => {
     const bus = new EventBus();
-    const toolbar = new Toolbar({ bus, initialMode: 'idle' });
+    const toolbar = new Toolbar({ bus, initialMode: 'idle', initialSignedIn: true });
     bus.emit('state:unplaced-changed', { annotations: [{ id: 'a', title: 'First', authorName: 'A' }] });
 
     const button = toolbar.el.querySelector('.wd-toolbar__unplaced') as HTMLButtonElement;
@@ -91,7 +91,7 @@ describe('Toolbar "N unplaced" tray', () => {
 
   it('the tray hides itself and closes its panel once the unplaced set empties out', () => {
     const bus = new EventBus();
-    const toolbar = new Toolbar({ bus, initialMode: 'idle' });
+    const toolbar = new Toolbar({ bus, initialMode: 'idle', initialSignedIn: true });
     bus.emit('state:unplaced-changed', { annotations: [{ id: 'a', title: 'X', authorName: 'Y' }] });
 
     const button = toolbar.el.querySelector('.wd-toolbar__unplaced') as HTMLButtonElement;
@@ -106,13 +106,68 @@ describe('Toolbar "N unplaced" tray', () => {
 
   it('dispose() unsubscribes — a later state:unplaced-changed no longer updates the (removed) button', () => {
     const bus = new EventBus();
-    const toolbar = new Toolbar({ bus, initialMode: 'idle' });
+    const toolbar = new Toolbar({ bus, initialMode: 'idle', initialSignedIn: true });
     const button = toolbar.el.querySelector('.wd-toolbar__unplaced') as HTMLButtonElement;
 
     toolbar.dispose();
     bus.emit('state:unplaced-changed', { annotations: [{ id: 'a', title: 'X', authorName: 'Y' }] });
 
     expect(button.hidden).toBe(true); // never updated post-dispose
+  });
+});
+
+// Issue #19: the toggle button's label doubles as the affordance that
+// explains what clicking it does — "Sign in to annotate" while signed out,
+// reverting to "New annotation" once a session exists. No extra chip or
+// chrome, per the decision settled with the user.
+describe('Toolbar signed-out label (issue #19)', () => {
+  it('reads "Sign in to annotate" when constructed with initialSignedIn: false', () => {
+    const bus = new EventBus();
+    const toolbar = new Toolbar({ bus, initialMode: 'idle', initialSignedIn: false });
+
+    expect(toolbar.el.querySelector('.wd-toolbar__button')?.textContent).toBe('Sign in to annotate');
+    expect(toolbar.el.querySelector('.wd-toolbar__button')?.getAttribute('aria-label')).toBe('Sign in to annotate');
+  });
+
+  it('reads "New annotation" when constructed with initialSignedIn: true', () => {
+    const bus = new EventBus();
+    const toolbar = new Toolbar({ bus, initialMode: 'idle', initialSignedIn: true });
+
+    expect(toolbar.el.querySelector('.wd-toolbar__button')?.textContent).toBe('New annotation');
+  });
+
+  it('flips from "Sign in to annotate" to "New annotation" on state:session-changed', () => {
+    const bus = new EventBus();
+    const toolbar = new Toolbar({ bus, initialMode: 'idle', initialSignedIn: false });
+    const button = toolbar.el.querySelector('.wd-toolbar__button') as HTMLButtonElement;
+    expect(button.textContent).toBe('Sign in to annotate');
+
+    bus.emit('state:session-changed', { signedIn: true });
+
+    expect(button.textContent).toBe('New annotation');
+    expect(button.getAttribute('aria-label')).toBe('New annotation');
+  });
+
+  it('flips back to "Sign in to annotate" on state:session-changed with signedIn: false', () => {
+    const bus = new EventBus();
+    const toolbar = new Toolbar({ bus, initialMode: 'idle', initialSignedIn: true });
+    const button = toolbar.el.querySelector('.wd-toolbar__button') as HTMLButtonElement;
+
+    bus.emit('state:session-changed', { signedIn: false });
+
+    expect(button.textContent).toBe('Sign in to annotate');
+  });
+
+  it('focusToggle() moves focus to the toggle button', () => {
+    const bus = new EventBus();
+    const toolbar = new Toolbar({ bus, initialMode: 'idle', initialSignedIn: true });
+    document.body.appendChild(toolbar.el);
+    const button = toolbar.el.querySelector('.wd-toolbar__button') as HTMLButtonElement;
+
+    toolbar.focusToggle();
+
+    expect(document.activeElement).toBe(button);
+    toolbar.el.remove();
   });
 });
 
@@ -123,7 +178,7 @@ describe('Toolbar "N unplaced" panel keyboard/focus behavior (M6)', () => {
 
   it('opening the panel (click) moves focus into it', () => {
     const bus = new EventBus();
-    const toolbar = new Toolbar({ bus, initialMode: 'idle' });
+    const toolbar = new Toolbar({ bus, initialMode: 'idle', initialSignedIn: true });
     document.body.appendChild(toolbar.el);
     bus.emit('state:unplaced-changed', { annotations: [{ id: 'a', title: 'X', authorName: 'Y' }] });
 
@@ -136,7 +191,7 @@ describe('Toolbar "N unplaced" panel keyboard/focus behavior (M6)', () => {
 
   it('Escape closes the panel and returns focus to the toggle button', () => {
     const bus = new EventBus();
-    const toolbar = new Toolbar({ bus, initialMode: 'idle' });
+    const toolbar = new Toolbar({ bus, initialMode: 'idle', initialSignedIn: true });
     document.body.appendChild(toolbar.el);
     bus.emit('state:unplaced-changed', { annotations: [{ id: 'a', title: 'X', authorName: 'Y' }] });
 
@@ -154,7 +209,7 @@ describe('Toolbar "N unplaced" panel keyboard/focus behavior (M6)', () => {
 
   it('the panel is focusable (tabindex="-1") and carries a dialog role + accessible name', () => {
     const bus = new EventBus();
-    const toolbar = new Toolbar({ bus, initialMode: 'idle' });
+    const toolbar = new Toolbar({ bus, initialMode: 'idle', initialSignedIn: true });
     const panel = toolbar.el.querySelector('.wd-unplaced-panel') as HTMLElement;
 
     expect(panel.getAttribute('tabindex')).toBe('-1');
@@ -164,7 +219,7 @@ describe('Toolbar "N unplaced" panel keyboard/focus behavior (M6)', () => {
 
   it('dispose() removes the panel keydown listener', () => {
     const bus = new EventBus();
-    const toolbar = new Toolbar({ bus, initialMode: 'idle' });
+    const toolbar = new Toolbar({ bus, initialMode: 'idle', initialSignedIn: true });
     document.body.appendChild(toolbar.el);
     bus.emit('state:unplaced-changed', { annotations: [{ id: 'a', title: 'X', authorName: 'Y' }] });
     const button = toolbar.el.querySelector('.wd-toolbar__unplaced') as HTMLButtonElement;

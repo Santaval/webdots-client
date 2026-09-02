@@ -165,7 +165,7 @@ When a reviewer creates an annotation, the callback runs **in parallel** with th
 
 Reviewers sign in via an email magic link. Because the widget is embedded in arbitrary host pages (where a link redirect would lose the embed context), the primary flow is **pasting the short code** from the email into the widget's own panel — not following the link.
 
-When `init()` is called **without** a `user`, the widget mounts a sign-in panel in its Shadow DOM instead of going straight into annotation mode:
+When `init()` is called **without** a `user`, the widget loads unobtrusively — it does not block the host page or force sign-in on load. The sign-in panel opens only once the reviewer presses the toolbar's "Sign in to annotate" button (which reads "New annotation" once a session exists), or an embedder calls `handle.setMode('annotate')` programmatically before a reviewer has signed in. The panel is dismissible (Escape, its "×" button, or clicking outside it), and doing so simply returns to the idle state — the reviewer can reopen it at any time by asking to annotate again:
 
 ```ts
 import { init } from '@webdots/annotate-client';
@@ -186,7 +186,7 @@ The panel drives two endpoints on the configured `apiUrl`:
 
 An expired or invalid code is signalled by the server as `410 Gone` and rendered as a dedicated **expired-code** surface with a "Resend" action. Loading, error, and expired states are all themed through the widget's existing design tokens, and the whole flow ships with zero runtime dependencies.
 
-Once verification succeeds, the returned `user` is written back into the widget's config, the panel unmounts, annotation loading runs (if `autoLoad` is on), and annotate mode becomes available. An embedder who already knows the reviewer can pass `user` at `init()` to skip the panel entirely.
+Once verification succeeds, the returned `user` is written back into the widget's config, the panel unmounts, annotate mode is entered automatically (resuming whatever action asked for sign-in in the first place), and annotation loading runs (if `autoLoad` is on) — annotations for a signed-out visitor stay deferred until a session exists, so there's no attribution identity to load against beforehand. An embedder who already knows the reviewer can pass `user` at `init()` to skip the panel entirely.
 
 The session `token` is attached to subsequent annotation requests as `Authorization: Bearer` and persisted in `localStorage` (namespaced by `apiUrl`, and implicitly the host origin since `localStorage` is origin-scoped), so a reviewer stays signed in across reloads and navigation to other pages on the same site — no re-prompting on every page. The stored token is trusted optimistically: if it has since expired, the next annotation request returns `401` and the widget clears the session, re-opens the sign-in panel, and rolls back any in-flight optimistic write (drop + rollback) — no page reload required.
 
