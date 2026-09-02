@@ -256,11 +256,13 @@ export class Widget implements WidgetHandle {
     // ESTABLISHING a reviewer identity when neither an embedder-supplied
     // `user` nor a stored session exists at init. An embedder who already
     // knows the reviewer passes `user` and skips the panel entirely.
-    // #5: a session persisted from a PRIOR sign-in (namespaced by apiUrl +
-    // pageKey) is restored on reload — the token survives and annotate stays
-    // un-gated, no re-prompt. The stored token is trusted optimistically; if
-    // it has since expired, the first annotation request 401s and
-    // `expireSession()` re-opens the panel.
+    // #5: a session persisted from a PRIOR sign-in (namespaced by apiUrl
+    // alone) is restored here — the token survives and annotate stays
+    // un-gated, no re-prompt. #18: because the namespace is apiUrl only (not
+    // apiUrl + pageKey), this restore fires on navigation to ANY page on the
+    // site, not just a reload of the same page. The stored token is trusted
+    // optimistically; if it has since expired, the first annotation request
+    // 401s and `expireSession()` re-opens the panel.
     // #6: a stored session is a VERIFIED identity and beats an unverified
     // client-supplied `config.user` — `config.user` is now an anonymous-mode
     // fallback only. So a stored session is restored EVEN when `config.user`
@@ -268,7 +270,7 @@ export class Widget implements WidgetHandle {
     // supplying `config.user` alongside an active session is deprecated: a
     // one-time warning fires here. With neither a stored session nor a
     // `user`, the AuthPanel mounts as before.
-    const stored = loadSession(config.apiUrl, config.pageKey);
+    const stored = loadSession(config.apiUrl);
     if (stored) {
       if (config.user) {
         this.log.warn(
@@ -444,13 +446,14 @@ export class Widget implements WidgetHandle {
    * performs the deferred initial annotation fetch now that attribution is
    * possible. #5 also holds the session token live in `sessionToken` (read
    * by the annotations transport's `getToken`) and persists it to
-   * localStorage so the session survives a reload.
+   * localStorage — namespaced by `apiUrl` alone (#18) — so the session
+   * survives both a reload and navigation to other pages on the same site.
    */
   private finishAuth(session: MagicLinkSession): void {
     this.config.user = { name: session.user.name, email: session.user.email };
     this.sessionToken = session.token;
     this.sessionExpired = false; // a fresh session supersedes any prior expiry latch
-    saveSession(this.config.apiUrl, this.config.pageKey, session);
+    saveSession(this.config.apiUrl, session);
     this.authPanel?.dispose();
     this.authPanel = null;
     if (this.config.autoLoad) {
@@ -479,7 +482,7 @@ export class Widget implements WidgetHandle {
     if (this.sessionExpired) return; // concurrent 401s collapse to one transition
     this.sessionExpired = true;
     this.sessionToken = undefined;
-    clearSession(this.config.apiUrl, this.config.pageKey);
+    clearSession(this.config.apiUrl);
     this.config.user = undefined;
     // Close any surfaces that presume an authed reviewer, then re-gate mode.
     this.closeComposerUi();

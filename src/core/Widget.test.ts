@@ -6,7 +6,6 @@ import type { AuthAPI, MagicLinkSession } from '../api/AuthAPI';
 import type { Annotation, AnnotationStatus, WidgetMode } from './types';
 import type { AnchorDescriptor } from '../anchor/types';
 import type { WebdotsConfig } from './config';
-import { resolvePageKey } from '../utils/pageKey';
 import { loadSession, saveSession } from '../utils/sessionStore';
 
 function makeAnnotation(overrides: Partial<Annotation> = {}): Annotation {
@@ -629,16 +628,6 @@ describe('Widget reviewer auth — magic link (M3, issue #4)', () => {
 describe('Widget JWT session (M3, issue #5)', () => {
   const API_URL = 'https://api.example.com/api/v1';
 
-  /**
-   * The pageKey Widget resolves at init — `resolveConfig` calls
-   * `resolvePageKey(new URL(location.href))`. The test must seed localStorage
-   * with the SAME key the Widget will read, so derive it the same way rather
-   * than hard-coding a URL that could drift from jsdom's location.
-   */
-  function pageKey(): string {
-    return resolvePageKey(new URL(location.href));
-  }
-
   const storedSession: MagicLinkSession = {
     token: 'tok_live',
     user: { name: 'Ada', email: 'ada@example.com' },
@@ -671,7 +660,7 @@ describe('Widget JWT session (M3, issue #5)', () => {
 
   // Acceptance: "Token survives reload."
   it('a stored session restores without re-prompting, enables annotate, and runs autoLoad', async () => {
-    saveSession(API_URL, pageKey(), storedSession);
+    saveSession(API_URL, storedSession);
     const api = makeStubApi([makeAnnotation()]);
     const { handle, root } = await mount(api, { user: undefined });
 
@@ -689,7 +678,7 @@ describe('Widget JWT session (M3, issue #5)', () => {
     const authApi = makeStubAuthApi(storedSession);
     const { root } = await mount(api, { user: undefined, authApi });
 
-    expect(loadSession(API_URL, pageKey())).toBeNull(); // nothing persisted yet
+    expect(loadSession(API_URL)).toBeNull(); // nothing persisted yet
 
     fillAuthEmail(root, 'ada@example.com');
     submitAuthEmail(root);
@@ -698,13 +687,13 @@ describe('Widget JWT session (M3, issue #5)', () => {
     submitAuthCode(root);
     await flush();
 
-    // The session is now persisted under the apiUrl+pageKey namespace.
-    expect(loadSession(API_URL, pageKey())).toEqual(storedSession);
+    // The session is now persisted under the apiUrl namespace.
+    expect(loadSession(API_URL)).toEqual(storedSession);
   });
 
   // Acceptance: "expiry re-prompts without a page reload."
   it('a token-present 401 on autoLoad clears the session, re-opens the AuthPanel, and re-gates annotate (no toast)', async () => {
-    saveSession(API_URL, pageKey(), storedSession);
+    saveSession(API_URL, storedSession);
     const api = makeStubApi();
     api.list.mockRejectedValue(new AuthError(401, `${API_URL}/annotations`)); // every list 401s
     const onError = vi.fn();
@@ -716,14 +705,14 @@ describe('Widget JWT session (M3, issue #5)', () => {
     handle.setMode('annotate');
     expect(handle.getMode()).toBe('idle');
     // The persisted session was cleared.
-    expect(loadSession(API_URL, pageKey())).toBeNull();
+    expect(loadSession(API_URL)).toBeNull();
     // No error toast / onError — the re-opened panel IS the user-facing signal.
     expect(root.querySelector('.wd-toast__message')).toBeNull();
     expect(onError).not.toHaveBeenCalled();
   });
 
   it('a token-present 401 on a create rolls back the optimistic pin and re-opens the panel (drop + rollback, no toast)', async () => {
-    saveSession(API_URL, pageKey(), storedSession);
+    saveSession(API_URL, storedSession);
     const api = makeStubApi([]); // list resolves [] so autoLoad succeeds
     api.create.mockRejectedValueOnce(new AuthError(401, `${API_URL}/annotations`));
     const onError = vi.fn();
@@ -751,7 +740,7 @@ describe('Widget JWT session (M3, issue #5)', () => {
     // Annotate re-gated.
     expect(handle.getMode()).toBe('idle');
     // Persisted session cleared.
-    expect(loadSession(API_URL, pageKey())).toBeNull();
+    expect(loadSession(API_URL)).toBeNull();
     // No toast, no onError — the panel is the signal, not a generic error.
     expect(root.querySelector('.wd-toast__message')).toBeNull();
     expect(onError).not.toHaveBeenCalled();
@@ -759,7 +748,7 @@ describe('Widget JWT session (M3, issue #5)', () => {
   });
 
   it('idempotency: a second 401 after expiry does not re-mount the panel or surface a misleading toast', async () => {
-    saveSession(API_URL, pageKey(), storedSession);
+    saveSession(API_URL, storedSession);
     const api = makeStubApi();
     api.list.mockRejectedValue(new AuthError(401, `${API_URL}/annotations`)); // every list 401s
     const onError = vi.fn();
@@ -800,7 +789,7 @@ describe('Widget JWT session (M3, issue #5)', () => {
   // ---- #6: derive identity from session; deprecate config.user -----------
 
   it('with an active session, create() omits authorName/authorEmail so the server derives them from the JWT (#6)', async () => {
-    saveSession(API_URL, pageKey(), storedSession);
+    saveSession(API_URL, storedSession);
     const api = makeStubApi([]); // list resolves [] so autoLoad succeeds
     api.create.mockResolvedValueOnce({ ...makeAnnotation({ id: 'srv_new' }), authorName: 'Ada', authorEmail: 'ada@example.com' });
     const { handle, root } = await mount(api, { user: undefined });
@@ -859,7 +848,7 @@ describe('Widget JWT session (M3, issue #5)', () => {
   });
 
   it('a supplied config.user alongside a stored session is deprecated: the session identity wins and a warning is logged (#6)', async () => {
-    saveSession(API_URL, pageKey(), storedSession);
+    saveSession(API_URL, storedSession);
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const api = makeStubApi([]); // list resolves [] so autoLoad succeeds
     api.create.mockResolvedValueOnce(makeAnnotation({ id: 'srv_new' }));
@@ -899,6 +888,28 @@ describe('Widget JWT session (M3, issue #5)', () => {
     );
     target.remove();
     warnSpy.mockRestore();
+  });
+
+  // Issue #18 regression guard: a session is identity, not per-page state — it
+  // must restore on ANY page of the site, not just the one it was saved on.
+  // `sessionKey` is namespaced by `apiUrl` alone (localStorage is already
+  // origin-scoped, so the host site is implicit); it deliberately does NOT
+  // fold in `pageKey` the way annotation grouping does.
+  it('restores a session saved on a different page (issue #18)', async () => {
+    saveSession(API_URL, storedSession);
+    const api = makeStubApi([makeAnnotation()]);
+    const { handle, root } = await mount(api, {
+      user: undefined,
+      pageKey: 'https://host.example/some/other/page',
+    });
+
+    // No AuthPanel — the session restores regardless of the current pageKey.
+    expect(root.querySelector('.wd-auth')).toBeNull();
+    // Annotate is un-gated (attribution identity restored).
+    handle.setMode('annotate');
+    expect(handle.getMode()).toBe('annotate');
+    // The restored session's first request is the deferred autoLoad.
+    expect(api.list).toHaveBeenCalledTimes(1);
   });
 });
 
