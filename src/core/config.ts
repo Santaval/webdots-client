@@ -23,6 +23,13 @@ export interface WebdotsConfig {
   pageKey?: PageKeyResolver;
   autoLoad?: boolean;
   showResolved?: boolean;
+  /**
+   * Issue #20: whether annotations (pins/overlay) start hidden. This is only
+   * the INITIAL state — a stored per-`apiUrl` preference (set by the
+   * toolbar's "Hide annotations" toggle, or `handle.setAnnotationsVisible()`)
+   * wins over this on every subsequent load. Default `false`.
+   */
+  hideAnnotations?: boolean;
   container?: HTMLElement;
   zIndex?: number;
   theme?: 'light' | 'dark' | 'auto';
@@ -66,6 +73,7 @@ export interface ResolvedWebdotsConfig {
   pageKey: string;
   autoLoad: boolean;
   showResolved: boolean;
+  hideAnnotations: boolean;
   container: HTMLElement;
   zIndex: number;
   theme: 'light' | 'dark' | 'auto';
@@ -159,6 +167,7 @@ export function resolveConfig(raw: WebdotsConfig): ResolvedWebdotsConfig {
     pageKey,
     autoLoad: raw.autoLoad ?? true,
     showResolved: raw.showResolved ?? false,
+    hideAnnotations: raw.hideAnnotations ?? false,
     container: raw.container ?? document.body,
     zIndex: raw.zIndex ?? DEFAULT_Z_INDEX,
     theme: raw.theme ?? 'auto',
