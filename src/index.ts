@@ -36,7 +36,16 @@ export function destroy(): void {
 }
 
 export type { WebdotsConfig } from './core/config';
-export type { WidgetHandle, WidgetMode, Annotation, AnnotationStatus, AnnotationPriority, ScreenshotContext } from './core/types';
+export type {
+  WidgetHandle,
+  WidgetMode,
+  Annotation,
+  AnnotationStatus,
+  AnnotationPriority,
+  ScreenshotContext,
+  ToolbarCorner,
+  ToolbarPosition,
+} from './core/types';
 export type { AnchorDescriptor } from './anchor/types';
 export type { PublicEvents } from './core/events';
 export type { AnnotationAPI, ListAnnotationsQuery, CreateAnnotationInput, UpdateAnnotationInput } from './api/AnnotationAPI';

@@ -1,4 +1,4 @@
-import type { Annotation, AnnotationPriority, AnnotationStatus, WidgetMode } from './types';
+import type { Annotation, AnnotationPriority, AnnotationStatus, ToolbarPosition, WidgetMode } from './types';
 import type { ResolveConfidence } from '../anchor/types';
 import type { MagicLinkSession } from '../api/AuthAPI';
 
@@ -73,6 +73,15 @@ export interface WebdotsEvents {
    */
   'intent:toggle-annotations': undefined;
 
+  /**
+   * Issue #21: the toolbar's grip wants the toolbar moved — the payload is
+   * the ALREADY-CLAMPED free `{ x, y }` point the drag/arrow-key ended on.
+   * Corners never travel over the bus: they are config-only seeds, and a
+   * drag by definition produces a point. Typed payload, same as
+   * `intent:set-mode`. Widget answers with `state:toolbar-position-changed`.
+   */
+  'intent:set-toolbar-position': { x: number; y: number };
+
   // ---- state (Widget/Store -> UI) -------------------------------------
   'state:mode-changed': { mode: WidgetMode };
   'state:visibility-changed': { visible: boolean };
@@ -86,6 +95,16 @@ export interface WebdotsEvents {
    * embedder can observe the reviewer hiding/showing annotations.
    */
   'state:annotations-visibility-changed': { visible: boolean };
+  /**
+   * Issue #21: fires whenever the toolbar's placement changes — a drag
+   * releasing, an arrow-key move on the grip, or `handle.setToolbarPosition()`.
+   * Carries the full corner-or-point position (the same union
+   * `handle.getToolbarPosition()` returns), not just the drag point, because
+   * an embedder can set a corner programmatically. Public — see
+   * `PublicEventName` below — so an embedder can observe the reviewer moving
+   * the toolbar.
+   */
+  'state:toolbar-position-changed': { position: ToolbarPosition };
   'state:annotations-changed': {
     added: Annotation[];
     updated: Annotation[];
@@ -145,6 +164,10 @@ export interface WebdotsEvents {
 export type AuthPhase = 'idle' | 'email' | 'requesting' | 'code-sent' | 'verifying' | 'verified';
 
 /** Event names available to library consumers via `handle.on()`. */
-export type PublicEventName = 'state:mode-changed' | 'state:visibility-changed' | 'state:annotations-visibility-changed';
+export type PublicEventName =
+  | 'state:mode-changed'
+  | 'state:visibility-changed'
+  | 'state:annotations-visibility-changed'
+  | 'state:toolbar-position-changed';
 
 export type PublicEvents = Pick<WebdotsEvents, PublicEventName>;

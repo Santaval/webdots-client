@@ -63,6 +63,7 @@ Only `apiUrl` is required at the type level; `user` is optional — when omitted
 | `autoLoad` | `boolean` | `true` | Fetch and render existing annotations on init. |
 | `showResolved` | `boolean` | `false` | Render resolved annotations. When `false`, resolving an annotation removes its pin. |
 | `hideAnnotations` | `boolean` | `false` | Whether annotations (pins/overlay) start hidden. This is only the **initial** state — a stored per-`apiUrl` preference (set by the toolbar's "Hide annotations" toggle, or `handle.setAnnotationsVisible()`) wins on every subsequent load. |
+| `toolbarPosition` | `'top-left' \| 'top-right' \| 'bottom-left' \| 'bottom-right'` | `'bottom-right'` | The corner the floating toolbar starts in. This is only the **initial** placement — a stored per-`apiUrl` preference (set by the reviewer dragging the toolbar's grip, or `handle.setToolbarPosition()`) wins on every subsequent load. See [Toolbar placement](#toolbar-placement). |
 | `container` | `HTMLElement` | `document.body` | Where the shadow host is mounted. |
 | `zIndex` | `number` | `2147483000` | Stacking order of the widget layer. |
 | `theme` | `'light' \| 'dark' \| 'auto'` | `'auto'` | `'auto'` follows `prefers-color-scheme`. |
@@ -91,13 +92,15 @@ interface WidgetHandle {
   hide(): void;
   setAnnotationsVisible(visible: boolean): void;  // hide/show pins/overlay only — the toolbar stays usable
   getAnnotationsVisible(): boolean;
+  setToolbarPosition(position: ToolbarPosition): void;  // 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right' | { x, y } (clamped on-screen)
+  getToolbarPosition(): ToolbarPosition;
   getAnnotations(): readonly Annotation[];  // defensive copy
   on<K extends keyof PublicEvents>(event: K, handler: (payload: PublicEvents[K]) => void): () => void;
   readonly version: string;
 }
 ```
 
-`on()` returns an unsubscribe function. Public events are `'state:mode-changed'`, `'state:visibility-changed'`, and `'state:annotations-visibility-changed'`.
+`on()` returns an unsubscribe function. Public events are `'state:mode-changed'`, `'state:visibility-changed'`, `'state:annotations-visibility-changed'`, and `'state:toolbar-position-changed'`.
 
 Calling `init()` twice without `destroy()` logs a warning and returns the existing handle — it never creates a second shadow root.
 
@@ -108,6 +111,16 @@ Calling `init()` twice without `destroy()` logs a warning and returns the existi
 ```ts
 router.afterEach(() => widget.refresh());
 ```
+
+### Toolbar placement
+
+The floating toolbar starts in `config.toolbarPosition` (default: bottom-right) and the reviewer can move it from there:
+
+- **Drag** the grip at the toolbar's leading edge (`⦀`). The toolbar follows the pointer, is kept fully on-screen, and `Escape` cancels a drag in flight.
+- **Keyboard**: focus the grip (it's in the normal tab order) and nudge with the arrow keys (16px steps, clamped to the viewport).
+- **Programmatic**: `handle.setToolbarPosition('top-left')` or `handle.setToolbarPosition({ x, y })` — points are clamped fully on-screen, and corners clear any dragged position.
+
+Whatever the reviewer chooses (drag or arrow nudge) is persisted per-`apiUrl` in `localStorage` and wins over `config.toolbarPosition` on every subsequent load — the same preference rule as `hideAnnotations`. An embedder can observe moves via the public `'state:toolbar-position-changed'` event. Shrinking the viewport re-clamps a dragged position on-screen without rewriting the stored preference, so widening the window again restores it.
 
 ---
 

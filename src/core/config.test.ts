@@ -20,6 +20,8 @@ describe('resolveConfig', () => {
     expect(resolved.requestTimeoutMs).toBe(10000);
     expect(resolved.debug).toBe(false);
     expect(resolved.hideAnnotations).toBe(false);
+    // Issue #21: the historical resting spot is the default corner.
+    expect(resolved.toolbarPosition).toBe('bottom-right');
     // Default resolver: current location's origin + pathname (query/hash dropped).
     expect(resolved.pageKey).toBe(`${location.origin}${location.pathname}`);
   });
@@ -75,6 +77,7 @@ describe('resolveConfig', () => {
       requestTimeoutMs: 5000,
       testIdAttributes: ['data-qa-id'],
       hideAnnotations: true,
+      toolbarPosition: 'top-left',
     });
 
     expect(resolved.autoLoad).toBe(false);
@@ -86,6 +89,7 @@ describe('resolveConfig', () => {
     expect(resolved.requestTimeoutMs).toBe(5000);
     expect(resolved.testIdAttributes).toEqual(['data-qa-id']);
     expect(resolved.hideAnnotations).toBe(true);
+    expect(resolved.toolbarPosition).toBe('top-left');
   });
 
   it('carries user attribution through', () => {
@@ -135,8 +139,28 @@ describe('resolveConfig', () => {
 
   it('fails fast when theme is invalid', () => {
     expect(() =>
-      resolveConfig({ ...baseConfig, theme: 'neon' as unknown as WebdotsConfig['theme'] }),
+      resolveConfig({ ...baseConfig, theme: 'neon' as unknown as WebdotsConfig['theme'] })
     ).toThrow(/theme/);
+  });
+
+  // Issue #21: only the four preset corners are expressible in config — a
+  // free { x, y } point is reviewer/drag territory (handle.setToolbarPosition).
+  it('accepts each of the four toolbar corners', () => {
+    for (const corner of ['top-left', 'top-right', 'bottom-left', 'bottom-right'] as const) {
+      expect(resolveConfig({ ...baseConfig, toolbarPosition: corner }).toolbarPosition).toBe(corner);
+    }
+  });
+
+  it('fails fast when toolbarPosition is not a preset corner', () => {
+    expect(() =>
+      resolveConfig({
+        ...baseConfig,
+        toolbarPosition: 'middle' as unknown as WebdotsConfig['toolbarPosition'],
+      })
+    ).toThrow(/toolbarPosition/);
+    expect(() =>
+      resolveConfig({ ...baseConfig, toolbarPosition: { x: 10, y: 10 } as unknown as WebdotsConfig['toolbarPosition'] })
+    ).toThrow(/toolbarPosition/);
   });
 
   it('fails fast when requestTimeoutMs is not positive', () => {

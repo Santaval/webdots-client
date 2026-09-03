@@ -1593,4 +1593,149 @@ describe('Widget annotation visibility (issue #20)', () => {
   });
 });
 
+// Issue #21: the floating toolbar's position — config corner, reviewer drag
+// (persisted per-apiUrl, stored preference wins), and the handle methods.
+describe('Widget toolbar position (issue #21)', () => {
+  afterEach(() => {
+    destroy();
+    document.body.innerHTML = '';
+    vi.restoreAllMocks();
+    // setToolbarPosition() persists to localStorage, which jsdom shares
+    // across every test in this file — same hygiene as the #20 block above.
+    localStorage.clear();
+  });
+
+  function toolbarEl(root: ShadowRoot): HTMLElement {
+    return root.querySelector('.wd-toolbar') as HTMLElement;
+  }
+
+  function gripEl(root: ShadowRoot): HTMLElement {
+    return root.querySelector('.wd-toolbar__grip') as HTMLElement;
+  }
+
+  /** A deterministic toolbar rect — jsdom lays nothing out on its own. */
+  function stubToolbarRect(root: ShadowRoot, x: number, y: number, w = 320, h = 40): void {
+    vi.spyOn(toolbarEl(root), 'getBoundingClientRect').mockReturnValue({
+      x,
+      y,
+      left: x,
+      top: y,
+      right: x + w,
+      bottom: y + h,
+      width: w,
+      height: h,
+      toJSON: () => ({}),
+    } as DOMRect);
+  }
+
+  /** Drives the grip through a full pointer drag (MouseEvent-typed — listeners key off the event type, not the interface). */
+  function dragGrip(root: ShadowRoot, fromX: number, fromY: number, toX: number, toY: number): void {
+    const grip = gripEl(root);
+    grip.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX: fromX, clientY: fromY, button: 0 }));
+    document.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: toX, clientY: toY }));
+    document.dispatchEvent(new MouseEvent('pointerup', { bubbles: true, clientX: toX, clientY: toY }));
+  }
+
+  it('defaults to bottom-right and renders it as the corner class', async () => {
+    const { handle, root } = await mount(makeStubApi([]));
+
+    expect(handle.getToolbarPosition()).toBe('bottom-right');
+    expect(toolbarEl(root).classList.contains('wd-toolbar--bottom-right')).toBe(true);
+    expect(toolbarEl(root).style.left).toBe('');
+  });
+
+  it('config.toolbarPosition seeds the corner until the reviewer moves the toolbar', async () => {
+    const { handle, root } = await mount(makeStubApi([]), { toolbarPosition: 'top-left' });
+
+    expect(handle.getToolbarPosition()).toBe('top-left');
+    expect(toolbarEl(root).classList.contains('wd-toolbar--top-left')).toBe(true);
+    // A top corner also flips the unplaced panel to open below the toolbar.
+    expect(toolbarEl(root).classList.contains('wd-toolbar--panel-below')).toBe(true);
+  });
+
+  it('a full drag flows through the bus: intent -> persist -> state event -> inline rendering', async () => {
+    const { handle, root } = await mount(makeStubApi([]));
+    stubToolbarRect(root, 688, 712); // bottom-right area of jsdom's 1024x768
+    const stateHandler = vi.fn();
+    handle.on('state:toolbar-position-changed', stateHandler);
+
+    dragGrip(root, 700, 720, 300, 200); // -> clamped point (288, 192)
+
+    expect(handle.getToolbarPosition()).toEqual({ x: 288, y: 192 });
+    expect(toolbarEl(root).style.left).toBe('288px');
+    expect(toolbarEl(root).style.top).toBe('192px');
+    expect(stateHandler).toHaveBeenCalledWith({ position: { x: 288, y: 192 } });
+    // Persisted for the next mount, namespaced per-apiUrl.
+    expect(localStorage.getItem('webdots:view:toolbar-position:https://api.example.com/api/v1')).toBe(
+      '{"x":288,"y":192}',
+    );
+  });
+
+  it('a stored position (from a prior drag) wins over config.toolbarPosition on the next mount', async () => {
+    const first = await mount(makeStubApi([]), { toolbarPosition: 'top-left' });
+    stubToolbarRect(first.root, 688, 712);
+    dragGrip(first.root, 700, 720, 300, 200);
+    destroy();
+    document.body.innerHTML = '';
+
+    const { handle, root } = await mount(makeStubApi([]), { toolbarPosition: 'top-left' });
+
+    expect(handle.getToolbarPosition()).toEqual({ x: 288, y: 192 }); // the drag, not the config corner
+    expect(toolbarEl(root).style.left).toBe('288px');
+    expect(toolbarEl(root).classList.contains('wd-toolbar--top-left')).toBe(false);
+  });
+
+  it('setToolbarPosition() drives the same path as a drag, corner or point', async () => {
+    const { handle, root } = await mount(makeStubApi([]));
+
+    handle.setToolbarPosition('bottom-left');
+    expect(toolbarEl(root).classList.contains('wd-toolbar--bottom-left')).toBe(true);
+    expect(handle.getToolbarPosition()).toBe('bottom-left');
+
+    handle.setToolbarPosition({ x: 30, y: 60 });
+    expect(handle.getToolbarPosition()).toEqual({ x: 30, y: 60 });
+    expect(toolbarEl(root).style.left).toBe('30px');
+    expect(toolbarEl(root).style.top).toBe('60px');
+    // A corner set programmatically also clears the dragged inline position.
+    handle.setToolbarPosition('top-right');
+    expect(toolbarEl(root).style.left).toBe('');
+    expect(toolbarEl(root).classList.contains('wd-toolbar--top-right')).toBe(true);
+  });
+
+  it('setToolbarPosition() clamps an out-of-viewport point fully on-screen', async () => {
+    const { handle, root } = await mount(makeStubApi([]));
+    stubToolbarRect(root, 0, 0);
+
+    handle.setToolbarPosition({ x: 5000, y: -100 });
+
+    // jsdom viewport 1024x768, toolbar 320x40, margin 8.
+    expect(handle.getToolbarPosition()).toEqual({ x: 696, y: 8 });
+    expect(toolbarEl(root).style.left).toBe('696px');
+  });
+
+  it('setToolbarPosition() is idempotent — re-setting the current position does not re-emit', async () => {
+    const { handle } = await mount(makeStubApi([]));
+    handle.setToolbarPosition('top-left');
+    const handler = vi.fn();
+    handle.on('state:toolbar-position-changed', handler);
+
+    handle.setToolbarPosition('top-left'); // already there — no-op
+
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('setToolbarPosition() fails loudly on a shape-invalid position', async () => {
+    const { handle } = await mount(makeStubApi([]));
+
+    expect(() =>
+      handle.setToolbarPosition('diagonal' as unknown as ReturnType<typeof handle.getToolbarPosition>),
+    ).toThrow(/setToolbarPosition/);
+    expect(() =>
+      handle.setToolbarPosition({ x: Number.NaN, y: 10 } as unknown as ReturnType<typeof handle.getToolbarPosition>),
+    ).toThrow(/setToolbarPosition/);
+    // And the invalid call changed nothing.
+    expect(handle.getToolbarPosition()).toBe('bottom-right');
+  });
+});
+
 

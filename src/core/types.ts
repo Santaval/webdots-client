@@ -9,6 +9,25 @@ export type AnnotationPriority = 'LOW' | 'MEDIUM' | 'HIGH';
 export type WidgetMode = 'idle' | 'annotate' | 'composing';
 
 /**
+ * Issue #21: the four preset resting spots for the floating toolbar. This is
+ * the embedder-facing half of the placement config — `init({ toolbarPosition })`
+ * accepts (and validates) exactly these, and they are all the config can
+ * express: a free point only ever comes from the reviewer dragging the
+ * toolbar or an embedder calling `handle.setToolbarPosition({ x, y })`.
+ */
+export type ToolbarCorner = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
+
+/**
+ * Issue #21: a toolbar placement — one of the four preset corners, or a free
+ * `{ x, y }` viewport-space top-left point (what a drag or an arrow-key move
+ * produces). Corners re-resolve on every viewport resize (pure CSS); points
+ * are clamped fully on-screen when applied and re-clamped when the viewport
+ * shrinks. The stored per-`apiUrl` preference and `handle.getToolbarPosition()`
+ * both use this union.
+ */
+export type ToolbarPosition = ToolbarCorner | { x: number; y: number };
+
+/**
  * Full annotation domain model, defined now so later milestones (API client,
  * pins, forms) don't have to churn the shape. `anchor` is nullable to cover
  * legacy rows created before the anchor column existed.
@@ -74,6 +93,15 @@ export interface WidgetHandle {
    */
   setAnnotationsVisible(visible: boolean): void;
   getAnnotationsVisible(): boolean;
+  /**
+   * Issue #21: moves the floating toolbar. Accepts a preset corner or a free
+   * `{ x, y }` viewport point (finite numbers, clamped fully on-screen).
+   * Persisted per-`apiUrl`, so it wins over `config.toolbarPosition` on every
+   * subsequent load. Throws on a shape-invalid position, same fail-loud
+   * contract as `init()` config validation.
+   */
+  setToolbarPosition(position: ToolbarPosition): void;
+  getToolbarPosition(): ToolbarPosition;
   /** Defensive copy of the currently-loaded annotations. */
   getAnnotations(): readonly Annotation[];
   on<K extends keyof PublicEvents>(event: K, handler: (payload: PublicEvents[K]) => void): () => void;

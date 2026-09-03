@@ -3,7 +3,7 @@ import type { PublicEvents } from './events';
 import type { ResolvedWebdotsConfig } from './config';
 import { Store, type AnnotationDiff } from './Store';
 import { PinManager } from './PinManager';
-import type { Annotation, AnnotationPriority, AnnotationStatus, ScreenshotContext, WidgetHandle, WidgetMode } from './types';
+import type { Annotation, AnnotationPriority, AnnotationStatus, ScreenshotContext, ToolbarPosition, WidgetHandle, WidgetMode } from './types';
 import type { AnchorDescriptor, ResolveConfidence } from '../anchor/types';
 import { createAnchor } from '../anchor/createAnchor';
 import type { AnnotationAPI, UpdateAnnotationInput } from '../api/AnnotationAPI';
@@ -24,7 +24,8 @@ import { Disposables } from '../utils/Disposables';
 import { createLogger } from '../utils/log';
 import { createId } from '../utils/id';
 import { clearSession, loadSession, saveSession } from '../utils/sessionStore';
-import { loadAnnotationsHidden, saveAnnotationsHidden } from '../utils/viewPrefs';
+import { loadAnnotationsHidden, loadToolbarPosition, saveAnnotationsHidden, saveToolbarPosition } from '../utils/viewPrefs';
+import { clampToolbarPosition, isToolbarCorner, isToolbarPoint, sameToolbarPosition } from '../utils/toolbarPosition';
 import { AnchorUpgrader } from './AnchorUpgrader';
 
 interface PendingCreate {
@@ -107,6 +108,15 @@ export class Widget implements WidgetHandle {
    * force-revealing (see the plan's "Key architectural decision").
    */
   private annotationsVisible: boolean;
+  /**
+   * Issue #21: where the floating toolbar sits — one of the four preset
+   * corners, or a reviewer-dragged `{ x, y }` point. Same two-tier rule as
+   * `annotationsVisible` above: a stored per-`apiUrl` preference (set by a
+   * drag, an arrow-key nudge, or `handle.setToolbarPosition()`) wins over
+   * `config.toolbarPosition`, which is only the initial corner for a
+   * reviewer who has never moved the toolbar.
+   */
+  private toolbarPosition: ToolbarPosition;
   private log: ReturnType<typeof createLogger>;
 
   private popover: Popover | null = null;
@@ -187,6 +197,10 @@ export class Widget implements WidgetHandle {
     // the initial state for a reviewer who has never toggled it.
     const storedHidden = loadAnnotationsHidden(config.apiUrl);
     this.annotationsVisible = storedHidden !== null ? !storedHidden : !config.hideAnnotations;
+    // Issue #21: same two-tier rule as annotationsVisible above — a stored
+    // position (corner OR point, whatever the reviewer last chose) wins over
+    // the config corner, which is only the never-moved default.
+    this.toolbarPosition = loadToolbarPosition(config.apiUrl) ?? config.toolbarPosition;
     this.log = createLogger('Widget', config.debug);
     this.bus = new EventBus(config.debug);
     this.abortController = new AbortController();
@@ -278,7 +292,14 @@ export class Widget implements WidgetHandle {
     // `initialSignedIn` only sees the embedder-supplied-`config.user` case
     // here — the stored-session restore below runs AFTER this and updates
     // the Toolbar via the `state:session-changed` emit that follows it.
-    this.toolbar = new Toolbar({ bus: this.bus, initialMode: this.store.getMode(), initialSignedIn: this.hasUser() });
+    // Issue #21: `initialPosition` is the resolved two-tier placement
+    // (stored preference over config corner), same snapshot pattern.
+    this.toolbar = new Toolbar({
+      bus: this.bus,
+      initialMode: this.store.getMode(),
+      initialSignedIn: this.hasUser(),
+      initialPosition: this.toolbarPosition,
+    });
     this.shadowHost.shadowRoot.appendChild(this.toolbar.el);
     this.disposables.add(() => this.toolbar.dispose());
 
@@ -341,9 +362,18 @@ export class Widget implements WidgetHandle {
     // needed for either.
     this.bus.emit('state:annotations-visibility-changed', { visible: this.annotationsVisible });
 
+    // Issue #21: same once-only initial sync, mirroring #20 exactly even
+    // though Toolbar also takes an `initialPosition` snapshot — the emit is
+    // idempotent and keeps "UI syncs from state, never from constructor
+    // arguments alone" uniform.
+    this.bus.emit('state:toolbar-position-changed', { position: this.toolbarPosition });
+
     this.disposables.add(this.bus.on('intent:toggle-mode', () => this.handleToggleMode()));
     this.disposables.add(
       this.bus.on('intent:toggle-annotations', () => this.setAnnotationsVisible(!this.annotationsVisible)),
+    );
+    this.disposables.add(
+      this.bus.on('intent:set-toolbar-position', (point) => this.setToolbarPosition(point)),
     );
     this.disposables.add(this.bus.on('intent:refresh', () => void this.refresh()));
     this.disposables.add(this.bus.on('intent:create-annotation', (payload) => this.handleCreateAnnotation(payload)));
@@ -1225,6 +1255,38 @@ export class Widget implements WidgetHandle {
 
   getAnnotationsVisible(): boolean {
     return this.annotationsVisible;
+  }
+
+  /**
+   * Issue #21: moves the floating toolbar. Accepts a preset corner or a free
+   * `{ x, y }` viewport point (clamped fully on-screen, so an embedder can
+   * safely pass viewport- or out-of-viewport coordinates). Persisted
+   * per-`apiUrl`, winning over `config.toolbarPosition` on every subsequent
+   * load. Idempotent, like `setAnnotationsVisible()`; throws on a
+   * shape-invalid position, the same fail-loud contract `resolveConfig()`
+   * gives public input.
+   */
+  setToolbarPosition(position: ToolbarPosition): void {
+    if (!isToolbarCorner(position) && !isToolbarPoint(position)) {
+      throw new Error(
+        '[webdots] setToolbarPosition() requires a corner ("top-left" | "top-right" | "bottom-left" | "bottom-right") or an { x, y } point.',
+      );
+    }
+    // The intent arrives pre-clamped from Toolbar; an embedder call may not
+    // be. Clamping here (against the live toolbar size) makes this the one
+    // place a stored position is normalized before persisting.
+    const rect = this.toolbar.el.getBoundingClientRect();
+    const resolved: ToolbarPosition = isToolbarCorner(position)
+      ? position
+      : clampToolbarPosition(position, window.innerWidth, window.innerHeight, rect.width, rect.height);
+    if (sameToolbarPosition(resolved, this.toolbarPosition)) return;
+    this.toolbarPosition = resolved;
+    saveToolbarPosition(this.config.apiUrl, resolved);
+    this.bus.emit('state:toolbar-position-changed', { position: resolved });
+  }
+
+  getToolbarPosition(): ToolbarPosition {
+    return this.toolbarPosition;
   }
 
   /** Defensive copy — Store already returns a fresh array, but keep the contract explicit. */

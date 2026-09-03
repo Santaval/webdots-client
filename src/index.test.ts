@@ -108,4 +108,17 @@ describe('init/destroy lifecycle', () => {
     handle.setAnnotationsVisible(true);
     expect(handle.getAnnotationsVisible()).toBe(true);
   });
+
+  it('the returned handle exposes the issue #21 toolbar-position methods', () => {
+    const handle = init(baseConfig);
+
+    expect(handle.getToolbarPosition()).toBe('bottom-right'); // the documented default
+    handle.setToolbarPosition('top-left');
+    expect(handle.getToolbarPosition()).toBe('top-left');
+    handle.setToolbarPosition({ x: 40, y: 90 });
+    expect(handle.getToolbarPosition()).toEqual({ x: 40, y: 90 });
+    expect(() =>
+      handle.setToolbarPosition('diagonal' as unknown as Parameters<typeof handle.setToolbarPosition>[0]),
+    ).toThrow(/setToolbarPosition/);
+  });
 });

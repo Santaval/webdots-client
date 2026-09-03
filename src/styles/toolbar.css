@@ -24,6 +24,86 @@
   color: var(--wd-color-text);
 }
 
+/**
+ * Issue #21 placement. The base rule above keeps the historical bottom-right
+ * resting spot (so a not-yet-positioned toolbar never flashes top-left);
+ * Toolbar ALWAYS sets exactly one of the four corner modifiers for a corner
+ * position, while a dragged position is applied as INLINE left/top with
+ * right/bottom reset to auto — inline beats every class rule, so the
+ * modifiers only ever matter while the position is a corner. Corners are
+ * pure CSS on purpose: no measurement, and they re-resolve on every viewport
+ * resize for free.
+ */
+.wd-toolbar--top-left {
+  left: var(--wd-space-4);
+  top: var(--wd-space-4);
+  right: auto;
+  bottom: auto;
+}
+
+.wd-toolbar--top-right {
+  left: auto;
+  top: var(--wd-space-4);
+  right: var(--wd-space-4);
+  bottom: auto;
+}
+
+.wd-toolbar--bottom-left {
+  left: var(--wd-space-4);
+  top: auto;
+  right: auto;
+  bottom: var(--wd-space-4);
+}
+
+.wd-toolbar--bottom-right {
+  left: auto;
+  top: auto;
+  right: var(--wd-space-4);
+  bottom: var(--wd-space-4);
+}
+
+/**
+ * The drag grip (issue #21) — the leading edge of the toolbar. A span, NOT
+ * a `.wd-toolbar__button`: Widget.test.ts relies on `.wd-toolbar__button`
+ * (first match) meaning the mode toggle. `touch-action: none` keeps a touch
+ * drag from scrolling the page instead; the three-bar grip is drawn in CSS
+ * (::before + box-shadow) so it never depends on a glyph being present in
+ * the host page's font stack.
+ */
+.wd-toolbar__grip {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  padding: var(--wd-space-2) var(--wd-space-1);
+  border-radius: var(--wd-radius-sm);
+  color: var(--wd-color-text-muted);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.wd-toolbar__grip::before {
+  content: '';
+  width: 2px;
+  height: 14px;
+  border-radius: 1px;
+  background: currentColor;
+  box-shadow: -4px 0 0 currentColor, 4px 0 0 currentColor;
+}
+
+.wd-toolbar__grip:focus-visible {
+  outline: 2px solid var(--wd-color-accent);
+  outline-offset: 1px;
+}
+
+.wd-toolbar--dragging {
+  user-select: none;
+}
+
+.wd-toolbar--dragging .wd-toolbar__grip {
+  cursor: grabbing;
+}
+
 .wd-toolbar * {
   box-sizing: border-box;
   font-family: inherit;
@@ -114,6 +194,18 @@
 
 .wd-unplaced-panel[hidden] {
   display: none;
+}
+
+/**
+ * Issue #21: the panel's default rule opens it ABOVE the toolbar (right
+ * edge, `bottom: calc(100% + …)`), which only works while the toolbar rests
+ * near the bottom. When the toolbar sits near the top (a top corner, or a
+ * dragged point with a small y), Toolbar toggles this modifier and the
+ * panel flips below instead — same flip idea as `computePlacement()`.
+ */
+.wd-toolbar--panel-below .wd-unplaced-panel {
+  top: calc(100% + var(--wd-space-2));
+  bottom: auto;
 }
 
 .wd-unplaced-panel:focus-visible {
