@@ -24,6 +24,7 @@ import { Disposables } from '../utils/Disposables';
 import { createLogger } from '../utils/log';
 import { createId } from '../utils/id';
 import { clearSession, loadSession, saveSession } from '../utils/sessionStore';
+import { loadAnnotationsHidden, saveAnnotationsHidden } from '../utils/viewPrefs';
 import { AnchorUpgrader } from './AnchorUpgrader';
 
 interface PendingCreate {
@@ -96,6 +97,16 @@ export class Widget implements WidgetHandle {
   private authApi: AuthAPI;
   private config: ResolvedWebdotsConfig;
   private visible = true;
+  /**
+   * Issue #20: whether pins/overlay/popovers are showing — a DISTINCT
+   * concept from `visible` (whole-widget show/hide, toolbar included). Set
+   * in the constructor from a stored per-`apiUrl` preference, falling back
+   * to `config.hideAnnotations` when nothing is stored. `hide()`/`show()`
+   * never touch this field — that's what makes `show()` restore whatever
+   * annotation-visibility state was in effect before, rather than
+   * force-revealing (see the plan's "Key architectural decision").
+   */
+  private annotationsVisible: boolean;
   private log: ReturnType<typeof createLogger>;
 
   private popover: Popover | null = null;
@@ -171,6 +182,11 @@ export class Widget implements WidgetHandle {
   constructor(config: ResolvedWebdotsConfig, version: string) {
     this.version = version;
     this.config = config;
+    // Issue #20: a stored per-`apiUrl` preference (set by a previous
+    // hide/show toggle) wins over `config.hideAnnotations`, which is only
+    // the initial state for a reviewer who has never toggled it.
+    const storedHidden = loadAnnotationsHidden(config.apiUrl);
+    this.annotationsVisible = storedHidden !== null ? !storedHidden : !config.hideAnnotations;
     this.log = createLogger('Widget', config.debug);
     this.bus = new EventBus(config.debug);
     this.abortController = new AbortController();
@@ -319,7 +335,16 @@ export class Widget implements WidgetHandle {
     // itself — same intent/state split as everything else here.
     this.bus.emit('state:session-changed', { signedIn: this.hasUser() });
 
+    // Issue #20: emitted once, here, AFTER Overlay and Toolbar are both
+    // constructed above so each syncs to the resolved initial state
+    // unconditionally — no `initialAnnotationsVisible` constructor option
+    // needed for either.
+    this.bus.emit('state:annotations-visibility-changed', { visible: this.annotationsVisible });
+
     this.disposables.add(this.bus.on('intent:toggle-mode', () => this.handleToggleMode()));
+    this.disposables.add(
+      this.bus.on('intent:toggle-annotations', () => this.setAnnotationsVisible(!this.annotationsVisible)),
+    );
     this.disposables.add(this.bus.on('intent:refresh', () => void this.refresh()));
     this.disposables.add(this.bus.on('intent:create-annotation', (payload) => this.handleCreateAnnotation(payload)));
     this.disposables.add(this.bus.on('intent:cancel-annotation', () => this.closeComposer()));
@@ -604,6 +629,11 @@ export class Widget implements WidgetHandle {
   }
 
   private handleDocumentClick(event: MouseEvent): void {
+    // Issue #20's `hide()` fix: a hidden widget must leave host-page clicks
+    // working normally — without this, a stale 'annotate' mode from before
+    // `hide()` could still intercept clicks even though the toolbar and
+    // every pin are gone from the screen.
+    if (!this.visible) return;
     if (this.getMode() !== 'annotate') return;
     // Defensive: annotate mode is gated on sign-in, so this should never
     // fire without a user — but a programmatic setMode could slip past the
@@ -1131,6 +1161,16 @@ export class Widget implements WidgetHandle {
       return;
     }
     this.store.setMode(mode);
+    // Issue #20 rule 3 (auto-reveal): entering annotate/composing while
+    // annotations are hidden reveals them — a reviewer who explicitly asks
+    // to create/see a new annotation should not have it appear into a
+    // hidden overlay. Placed AFTER the sign-in gate above so a mounted
+    // sign-in prompt never reveals anything. `setAnnotationsVisible(true)`
+    // only ever takes its reveal branch here (never calls back into
+    // `setMode`), so there is no recursion.
+    if ((mode === 'annotate' || mode === 'composing') && !this.annotationsVisible) {
+      this.setAnnotationsVisible(true);
+    }
   }
 
   getMode(): WidgetMode {
@@ -1143,10 +1183,48 @@ export class Widget implements WidgetHandle {
     this.bus.emit('state:visibility-changed', { visible: true });
   }
 
+  /**
+   * Issue #20: previously left every pin on screen, click-to-annotate
+   * armed, and any open popover mounted — contradicting the "hide/show the
+   * widget chrome without tearing down" contract. Now also closes whatever
+   * detail/composer surface is open and drops out of annotate mode, exactly
+   * like `expireSession()` already does for the same reason. Deliberately
+   * does NOT touch `annotationsVisible` — `show()` restores whatever
+   * annotation-visibility state was in effect before `hide()`, rather than
+   * force-revealing (see the plan's "Key architectural decision").
+   */
   hide(): void {
     if (!this.visible) return;
     this.visible = false;
+    this.closeComposer(); // cancels an in-flight compose, drops composing -> idle
+    this.closeDetailUi(); // no focus restore — the whole widget is going away
+    if (this.getMode() === 'annotate') this.setMode('idle');
     this.bus.emit('state:visibility-changed', { visible: false });
+  }
+
+  /**
+   * Issue #20: annotation-only visibility — pins/overlay/popovers, NOT the
+   * toolbar (which stays usable so the reviewer can toggle back). Persisted
+   * per-`apiUrl` so a reload/navigation keeps the preference. Idempotent,
+   * like `show()`/`hide()`. Hiding closes whatever detail surface is open
+   * (rule 1), cancels an in-flight compose (rule 2), and drops out of
+   * annotate mode — all BEFORE the state event fires, so subscribers never
+   * observe a hidden overlay with a popover still floating over it.
+   */
+  setAnnotationsVisible(visible: boolean): void {
+    if (this.annotationsVisible === visible) return;
+    this.annotationsVisible = visible;
+    saveAnnotationsHidden(this.config.apiUrl, !visible);
+    if (!visible) {
+      this.closeDetailUi({ restoreFocus: true }); // rule 1
+      this.closeComposer(); // rule 2 — cancels pendingCreate, drops composing -> idle
+      if (this.getMode() === 'annotate') this.setMode('idle');
+    }
+    this.bus.emit('state:annotations-visibility-changed', { visible });
+  }
+
+  getAnnotationsVisible(): boolean {
+    return this.annotationsVisible;
   }
 
   /** Defensive copy — Store already returns a fresh array, but keep the contract explicit. */

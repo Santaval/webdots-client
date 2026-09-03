@@ -23,11 +23,34 @@ export interface OverlayOptions {
  * matching add/remove bookkeeping for no benefit. Per the "no UI module
  * imports another UI module" rule this only imports `Pin` (its own child)
  * and `EventBus` (core/, not ui/), never Toolbar/Popover/etc.
+ *
+ * Issue #20 adds two INDEPENDENT visibility flags: `widgetVisible` (whole
+ * widget, `state:visibility-changed`) and `annotationsVisible`
+ * (annotations only, `state:annotations-visibility-changed`). The overlay
+ * hides itself (`.wd-overlay--hidden`) whenever EITHER is false, rather
+ * than Widget collapsing the two into one state and mutating it from both
+ * `hide()`/`show()` and `setAnnotationsVisible()` — that would need a
+ * "remember the previous annotation-visibility value" field just to make
+ * `show()` restore it instead of force-revealing. Keeping the two flags
+ * here, independently, makes that fall out for free: neither `hide()` nor
+ * `show()` ever touches `annotationsVisible`.
+ *
+ * Deliberately NOT `.wd-pin--hidden`: `PinManager.repositionAll()` ->
+ * `Pin.setPosition()` unconditionally removes that class on every layout
+ * tick, so a second writer here would fight it. Container-level
+ * `display: none` also removes pins from the tab order, which
+ * `opacity`/`visibility` would not (pins are `role="button"`/`tabindex="0"`).
+ * `repositionAll()` is left running while hidden — PinManager positions
+ * from host-page element rects, so positions stay correct inside a
+ * `display: none` overlay and there is no reveal flash.
  */
 export class Overlay {
   readonly el: HTMLDivElement;
   private pins = new Map<string, Pin>();
   private bus: EventBus;
+  private widgetVisible = true;
+  private annotationsVisible = true;
+  private unsubscribers: Array<() => void> = [];
 
   constructor(options: OverlayOptions) {
     this.bus = options.bus;
@@ -38,6 +61,21 @@ export class Overlay {
     this.el = h('div', { className: 'wd-overlay' });
     this.el.addEventListener('click', (event) => this.handleClick(event));
     this.el.addEventListener('keydown', (event) => this.handleKeydown(event));
+
+    this.unsubscribers.push(
+      this.bus.on('state:visibility-changed', ({ visible }) => {
+        this.widgetVisible = visible;
+        this.applyVisibility();
+      }),
+      this.bus.on('state:annotations-visibility-changed', ({ visible }) => {
+        this.annotationsVisible = visible;
+        this.applyVisibility();
+      }),
+    );
+  }
+
+  private applyVisibility(): void {
+    this.el.classList.toggle('wd-overlay--hidden', !(this.widgetVisible && this.annotationsVisible));
   }
 
   /** Creates the pin if new, or renumbers it in place if it already exists. */
@@ -102,6 +140,7 @@ export class Overlay {
   }
 
   dispose(): void {
+    for (const unsub of this.unsubscribers.splice(0)) unsub();
     for (const pin of this.pins.values()) pin.remove();
     this.pins.clear();
     this.el.remove();

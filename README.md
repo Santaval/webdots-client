@@ -62,6 +62,7 @@ Only `apiUrl` is required at the type level; `user` is optional — when omitted
 | `pageKey` | `string \| (url: URL) => string` | `origin + pathname` | How annotations are scoped to a page. The default drops query string and hash so `?utm_source=…` doesn't create a separate bucket. Resolved **once** at `init()`. |
 | `autoLoad` | `boolean` | `true` | Fetch and render existing annotations on init. |
 | `showResolved` | `boolean` | `false` | Render resolved annotations. When `false`, resolving an annotation removes its pin. |
+| `hideAnnotations` | `boolean` | `false` | Whether annotations (pins/overlay) start hidden. This is only the **initial** state — a stored per-`apiUrl` preference (set by the toolbar's "Hide annotations" toggle, or `handle.setAnnotationsVisible()`) wins on every subsequent load. |
 | `container` | `HTMLElement` | `document.body` | Where the shadow host is mounted. |
 | `zIndex` | `number` | `2147483000` | Stacking order of the widget layer. |
 | `theme` | `'light' \| 'dark' \| 'auto'` | `'auto'` | `'auto'` follows `prefers-color-scheme`. |
@@ -86,15 +87,17 @@ interface WidgetHandle {
   refresh(): Promise<void>;           // re-fetch and re-render for the current pageKey
   setMode(mode: WidgetMode): void;    // 'idle' | 'annotate' | 'composing'
   getMode(): WidgetMode;
-  show(): void;                       // hide/show the widget chrome without tearing down
+  show(): void;                       // hide/show toolbar + overlay + popovers, without tearing down; click-to-annotate suspended while hidden
   hide(): void;
+  setAnnotationsVisible(visible: boolean): void;  // hide/show pins/overlay only — the toolbar stays usable
+  getAnnotationsVisible(): boolean;
   getAnnotations(): readonly Annotation[];  // defensive copy
   on<K extends keyof PublicEvents>(event: K, handler: (payload: PublicEvents[K]) => void): () => void;
   readonly version: string;
 }
 ```
 
-`on()` returns an unsubscribe function. Public events are `'state:mode-changed'` and `'state:visibility-changed'`.
+`on()` returns an unsubscribe function. Public events are `'state:mode-changed'`, `'state:visibility-changed'`, and `'state:annotations-visibility-changed'`.
 
 Calling `init()` twice without `destroy()` logs a warning and returns the existing handle — it never creates a second shadow root.
 

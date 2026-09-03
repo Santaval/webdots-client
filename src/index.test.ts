@@ -41,6 +41,9 @@ describe('init/destroy lifecycle', () => {
     // Guard against a failing test leaving a widget mounted for the next one.
     destroy();
     document.body.innerHTML = '';
+    // Issue #20: setAnnotationsVisible()/init() read+write a localStorage
+    // key namespaced by apiUrl, which jsdom shares across tests.
+    localStorage.clear();
   });
 
   it('exposes a semver-ish version string', () => {
@@ -94,5 +97,15 @@ describe('init/destroy lifecycle', () => {
 
     handle.setMode('annotate');
     expect(handle.getMode()).toBe('annotate');
+  });
+
+  it('the returned handle exposes the issue #20 annotation-visibility methods', () => {
+    const handle = init(baseConfig);
+
+    expect(handle.getAnnotationsVisible()).toBe(true);
+    handle.setAnnotationsVisible(false);
+    expect(handle.getAnnotationsVisible()).toBe(false);
+    handle.setAnnotationsVisible(true);
+    expect(handle.getAnnotationsVisible()).toBe(true);
   });
 });

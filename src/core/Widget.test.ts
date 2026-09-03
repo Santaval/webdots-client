@@ -114,6 +114,10 @@ describe('Widget pin interactions (M4)', () => {
     destroy();
     document.body.innerHTML = '';
     vi.restoreAllMocks();
+    // Issue #20: setAnnotationsVisible() persists to localStorage, which
+    // jsdom shares across every test in this file — clear it so a test that
+    // hides annotations doesn't leak into the next mount.
+    localStorage.clear();
   });
 
   it('clicking a pin opens a card showing that annotation', async () => {
@@ -1350,6 +1354,242 @@ describe('Widget screenshot capture & upload (issue #8)', () => {
     // Capture was invoked while create was still in flight (it was called
     // synchronously at createAnnotation start, before the first await).
     expect(capture).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Issue #20: "hide annotations" toggle (pins/overlay/popovers only, toolbar
+// stays usable) PLUS the accompanying fix to the whole-widget show()/hide()
+// pair, which previously left pins on screen and click-to-annotate armed.
+describe('Widget annotation visibility (issue #20)', () => {
+  afterEach(() => {
+    destroy();
+    document.body.innerHTML = '';
+    vi.restoreAllMocks();
+    localStorage.clear();
+  });
+
+  function annotationsButton(root: ShadowRoot): HTMLButtonElement {
+    return root.querySelector('.wd-toolbar__annotations') as HTMLButtonElement;
+  }
+
+  function overlayEl(root: ShadowRoot): HTMLElement {
+    return root.querySelector('.wd-overlay') as HTMLElement;
+  }
+
+  it('clicking the toolbar toggle emits the intent through to a state:annotations-visibility-changed and hides the overlay', async () => {
+    const api = makeStubApi([makeAnnotation()]);
+    const { handle, root } = await mount(api);
+
+    expect(handle.getAnnotationsVisible()).toBe(true);
+    expect(overlayEl(root).classList.contains('wd-overlay--hidden')).toBe(false);
+
+    click(annotationsButton(root));
+
+    expect(handle.getAnnotationsVisible()).toBe(false);
+    expect(overlayEl(root).classList.contains('wd-overlay--hidden')).toBe(true);
+    expect(annotationsButton(root).textContent).toBe('Show annotations');
+  });
+
+  it('setAnnotationsVisible()/getAnnotationsVisible() drive the same path as the button and the button reflects programmatic changes', async () => {
+    const api = makeStubApi([makeAnnotation()]);
+    const { handle, root } = await mount(api);
+
+    handle.setAnnotationsVisible(false);
+
+    expect(handle.getAnnotationsVisible()).toBe(false);
+    expect(overlayEl(root).classList.contains('wd-overlay--hidden')).toBe(true);
+    expect(annotationsButton(root).getAttribute('aria-pressed')).toBe('true');
+
+    handle.setAnnotationsVisible(true);
+
+    expect(handle.getAnnotationsVisible()).toBe(true);
+    expect(overlayEl(root).classList.contains('wd-overlay--hidden')).toBe(false);
+    expect(annotationsButton(root).getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('setAnnotationsVisible is idempotent — calling it with the current value does not re-emit', async () => {
+    const api = makeStubApi([]);
+    const { handle } = await mount(api);
+    const handler = vi.fn();
+    handle.on('state:annotations-visibility-changed', handler);
+
+    handle.setAnnotationsVisible(true); // already true — no-op
+
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('toggling annotations does not touch annotation data: no fetch, no state:annotations-changed, count unchanged', async () => {
+    const api = makeStubApi([makeAnnotation()]);
+    const { handle, root } = await mount(api);
+    api.list.mockClear();
+    const countEl = root.querySelector('.wd-toolbar__count') as HTMLElement;
+    expect(countEl.textContent).toBe('1');
+
+    handle.setAnnotationsVisible(false);
+    handle.setAnnotationsVisible(true);
+
+    expect(api.list).not.toHaveBeenCalled();
+    expect(countEl.textContent).toBe('1'); // rule 5
+  });
+
+  it('rule 1: hiding annotations while a detail card is open closes it and returns focus to the toolbar', async () => {
+    const api = makeStubApi([makeAnnotation()]);
+    const { handle, root } = await mount(api);
+    clickPin(root, 'srv_1');
+    expect(root.querySelector('.wd-card__title')).not.toBeNull();
+
+    handle.setAnnotationsVisible(false);
+
+    expect(root.querySelector('.wd-card__title')).toBeNull();
+    expect(root.activeElement).toBe(root.querySelector('.wd-toolbar__button'));
+  });
+
+  it('rule 2: hiding annotations while composing cancels the in-flight compose and drops to idle', async () => {
+    const api = makeStubApi([]);
+    const { handle, root } = await mount(api);
+    handle.setMode('annotate');
+    const target = document.createElement('button');
+    document.body.appendChild(target);
+    target.dispatchEvent(new MouseEvent('click', { bubbles: true, composed: true, clientX: 5, clientY: 5 }));
+    expect(handle.getMode()).toBe('composing');
+    expect(root.querySelector('.wd-form')).not.toBeNull();
+
+    handle.setAnnotationsVisible(false);
+
+    expect(handle.getMode()).toBe('idle');
+    expect(root.querySelector('.wd-form')).toBeNull();
+    target.remove();
+  });
+
+  it('rule 2b: hiding annotations while in plain annotate mode (no popover yet) drops to idle', async () => {
+    const api = makeStubApi([]);
+    const { handle } = await mount(api);
+    handle.setMode('annotate');
+    expect(handle.getMode()).toBe('annotate');
+
+    handle.setAnnotationsVisible(false);
+
+    expect(handle.getMode()).toBe('idle');
+  });
+
+  it('rule 3: entering annotate mode via the toolbar while hidden auto-reveals annotations', async () => {
+    const api = makeStubApi([]);
+    const { handle, root } = await mount(api);
+    handle.setAnnotationsVisible(false);
+    expect(annotationsButton(root).textContent).toBe('Show annotations');
+
+    toggleAnnotateMode(root);
+
+    expect(handle.getAnnotationsVisible()).toBe(true);
+    expect(handle.getMode()).toBe('annotate');
+    expect(annotationsButton(root).textContent).toBe('Hide annotations');
+  });
+
+  it('rule 3: programmatic setMode("annotate") while hidden auto-reveals annotations', async () => {
+    const api = makeStubApi([]);
+    const { handle } = await mount(api);
+    handle.setAnnotationsVisible(false);
+
+    handle.setMode('annotate');
+
+    expect(handle.getAnnotationsVisible()).toBe(true);
+  });
+
+  it('rule 6: refresh() while hidden reconciles annotations without revealing them', async () => {
+    const api = makeStubApi([makeAnnotation()]);
+    const { handle, root } = await mount(api);
+    handle.setAnnotationsVisible(false);
+    api.list.mockResolvedValueOnce([makeAnnotation({ id: 'srv_2', title: 'Second' })]);
+
+    await handle.refresh();
+
+    expect(handle.getAnnotationsVisible()).toBe(false);
+    expect(overlayEl(root).classList.contains('wd-overlay--hidden')).toBe(true);
+    expect(handle.getAnnotations().map((a) => a.id)).toEqual(['srv_2']);
+  });
+
+  it('config.hideAnnotations: true starts annotations hidden', async () => {
+    const api = makeStubApi([]);
+    const { handle, root } = await mount(api, { hideAnnotations: true });
+
+    expect(handle.getAnnotationsVisible()).toBe(false);
+    expect(overlayEl(root).classList.contains('wd-overlay--hidden')).toBe(true);
+    expect(annotationsButton(root).textContent).toBe('Show annotations');
+  });
+
+  it('a stored preference (from a prior toggle) wins over config.hideAnnotations on the next mount', async () => {
+    const api = makeStubApi([]);
+    const first = await mount(api, { hideAnnotations: false });
+    first.handle.setAnnotationsVisible(false);
+    destroy();
+    document.body.innerHTML = '';
+
+    const { handle } = await mount(makeStubApi([]), { hideAnnotations: false });
+
+    expect(handle.getAnnotationsVisible()).toBe(false);
+  });
+
+  it('hide() fix: hides the toolbar AND the pins, closes any open popover, and suspends click-to-annotate', async () => {
+    const api = makeStubApi([makeAnnotation()]);
+    const { handle, root } = await mount(api);
+    clickPin(root, 'srv_1');
+    expect(root.querySelector('.wd-card__title')).not.toBeNull();
+
+    handle.hide();
+
+    expect(root.querySelector('.wd-toolbar')?.classList.contains('wd-toolbar--hidden')).toBe(true);
+    expect(overlayEl(root).classList.contains('wd-overlay--hidden')).toBe(true);
+    expect(root.querySelector('.wd-card__title')).toBeNull();
+
+    // A host-page click while hidden must behave like nothing is mounted —
+    // even if mode were somehow still 'annotate', no composer should open.
+    const target = document.createElement('button');
+    document.body.appendChild(target);
+    target.dispatchEvent(new MouseEvent('click', { bubbles: true, composed: true, clientX: 5, clientY: 5 }));
+    expect(root.querySelector('.wd-form')).toBeNull();
+    target.remove();
+  });
+
+  it('hide() while composing cancels the compose and drops to idle', async () => {
+    const api = makeStubApi([]);
+    const { handle, root } = await mount(api);
+    handle.setMode('annotate');
+    const target = document.createElement('button');
+    document.body.appendChild(target);
+    target.dispatchEvent(new MouseEvent('click', { bubbles: true, composed: true, clientX: 5, clientY: 5 }));
+    expect(handle.getMode()).toBe('composing');
+
+    handle.hide();
+
+    expect(handle.getMode()).toBe('idle');
+    expect(root.querySelector('.wd-form')).toBeNull();
+    target.remove();
+  });
+
+  it('show() restores the pre-hide annotation-visibility state rather than force-revealing', async () => {
+    const api = makeStubApi([]);
+    const { handle, root } = await mount(api);
+    handle.setAnnotationsVisible(false); // reviewer had already hidden annotations
+    handle.hide(); // now hide the whole widget
+    expect(overlayEl(root).classList.contains('wd-overlay--hidden')).toBe(true);
+
+    handle.show();
+
+    // Widget is back, but annotations stay hidden — show() never force-reveals.
+    expect(root.querySelector('.wd-toolbar')?.classList.contains('wd-toolbar--hidden')).toBe(false);
+    expect(handle.getAnnotationsVisible()).toBe(false);
+    expect(overlayEl(root).classList.contains('wd-overlay--hidden')).toBe(true);
+  });
+
+  it('show() restores VISIBLE annotations when that was the pre-hide state', async () => {
+    const api = makeStubApi([]);
+    const { handle, root } = await mount(api);
+    handle.hide(); // annotations were visible before hide()
+
+    handle.show();
+
+    expect(handle.getAnnotationsVisible()).toBe(true);
+    expect(overlayEl(root).classList.contains('wd-overlay--hidden')).toBe(false);
   });
 });
 

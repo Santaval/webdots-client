@@ -43,6 +43,7 @@ export class Toolbar {
 
   private toggleButton: HTMLButtonElement;
   private countEl: HTMLSpanElement;
+  private annotationsButton: HTMLButtonElement;
   private refreshButton: HTMLButtonElement;
   private unplacedButton: HTMLButtonElement;
   private unplacedPanel: HTMLDivElement;
@@ -53,6 +54,8 @@ export class Toolbar {
   private count = 0;
   private unplaced: UnplacedAnnotation[] = [];
   private unplacedOpen = false;
+  /** Issue #20: mirrors `Widget.annotationsVisible`, kept current via `state:annotations-visibility-changed`. */
+  private annotationsVisible = true;
   private unsubscribers: Array<() => void> = [];
 
   // Escape-to-close for the unplaced panel, matching Popover's own
@@ -87,6 +90,24 @@ export class Toolbar {
       'span',
       { className: 'wd-toolbar__count', 'aria-label': 'Annotation count', 'aria-live': 'polite' },
       '0',
+    );
+
+    // Issue #20: a second, independent visibility toggle — hides pins/
+    // overlay/popovers without touching the toolbar (see Overlay's class
+    // doc for the two-flag design). Inserted between `countEl` and
+    // `refreshButton` so it stays AFTER the mode-toggle button in document
+    // order — `Widget.test.ts` relies on `.wd-toolbar__button` (first match)
+    // meaning the mode toggle.
+    this.annotationsButton = h(
+      'button',
+      {
+        type: 'button',
+        className: 'wd-toolbar__button wd-toolbar__annotations',
+        'aria-label': 'Hide annotations',
+        'aria-pressed': 'false',
+        onclick: () => this.bus.emit('intent:toggle-annotations', undefined),
+      },
+      'Hide annotations',
     );
 
     this.refreshButton = h(
@@ -136,6 +157,7 @@ export class Toolbar {
       { className: 'wd-toolbar', role: 'toolbar', 'aria-label': 'Webdots annotation toolbar' },
       this.toggleButton,
       this.countEl,
+      this.annotationsButton,
       this.refreshButton,
       this.unplacedButton,
       this.unplacedPanel,
@@ -150,6 +172,7 @@ export class Toolbar {
       }),
       this.bus.on('state:unplaced-changed', ({ annotations }) => this.applyUnplaced(annotations)),
       this.bus.on('state:session-changed', ({ signedIn }) => this.applySignedIn(signedIn)),
+      this.bus.on('state:annotations-visibility-changed', ({ visible }) => this.applyAnnotationsVisibility(visible)),
     );
 
     this.applyMode(this.mode);
@@ -196,14 +219,38 @@ export class Toolbar {
 
   private applyUnplaced(annotations: UnplacedAnnotation[]): void {
     this.unplaced = annotations;
-    this.unplacedButton.hidden = annotations.length === 0;
     this.unplacedButton.textContent = `${annotations.length} unplaced`;
-
-    if (annotations.length === 0 && this.unplacedOpen) {
-      this.closeUnplacedPanel();
-    }
-
+    this.syncUnplacedButton();
     this.renderUnplacedList();
+  }
+
+  /**
+   * Issue #20 rule 4: the unplaced tray is an annotation surface, so it
+   * hides along with the pins (and closes its panel if open) — same as it
+   * already does when the unplaced set itself empties out. Factored out of
+   * `applyUnplaced()` so both call sites (a changed unplaced set, and a
+   * changed annotations-visibility flag) agree on the one hidden rule
+   * instead of duplicating it.
+   */
+  private syncUnplacedButton(): void {
+    this.unplacedButton.hidden = !this.annotationsVisible || this.unplaced.length === 0;
+    if (this.unplacedButton.hidden && this.unplacedOpen) this.closeUnplacedPanel();
+  }
+
+  /**
+   * Issue #20: reflects `Widget.annotationsVisible` on the toggle button.
+   * `aria-pressed` means "annotations are hidden" here — an active,
+   * unusual state worth flagging visually via the accent fill
+   * `[aria-pressed='true']` already gets in toolbar.css — so it is the
+   * negation of `visible`, not `visible` itself.
+   */
+  private applyAnnotationsVisibility(visible: boolean): void {
+    this.annotationsVisible = visible;
+    const label = visible ? 'Hide annotations' : 'Show annotations';
+    this.annotationsButton.textContent = label;
+    this.annotationsButton.setAttribute('aria-label', label);
+    this.annotationsButton.setAttribute('aria-pressed', String(!visible));
+    this.syncUnplacedButton();
   }
 
   private toggleUnplacedPanel(): void {

@@ -15,6 +15,17 @@
   pointer-events: none;
 }
 
+/**
+ * Issue #20: applied whenever EITHER the whole-widget visibility flag or
+ * the annotations-only visibility flag is false (see Overlay.ts). Must come
+ * AFTER the `.wd-overlay` rule above, since that rule uses `all: initial`
+ * and source order (not specificity alone) is what lets `display: none`
+ * win here.
+ */
+.wd-overlay--hidden {
+  display: none;
+}
+
 .wd-pin {
   all: initial;
   box-sizing: border-box;

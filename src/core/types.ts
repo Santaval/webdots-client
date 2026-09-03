@@ -67,6 +67,13 @@ export interface WidgetHandle {
   getMode(): WidgetMode;
   show(): void;
   hide(): void;
+  /**
+   * Issue #20: shows/hides annotations (pins/overlay/popovers) only — the
+   * toolbar stays usable. Distinct from `show()`/`hide()`, which affect the
+   * whole widget. Persisted per-`apiUrl`.
+   */
+  setAnnotationsVisible(visible: boolean): void;
+  getAnnotationsVisible(): boolean;
   /** Defensive copy of the currently-loaded annotations. */
   getAnnotations(): readonly Annotation[];
   on<K extends keyof PublicEvents>(event: K, handler: (payload: PublicEvents[K]) => void): () => void;

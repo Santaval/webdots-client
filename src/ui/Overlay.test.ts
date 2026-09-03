@@ -119,3 +119,60 @@ describe('Overlay pin activation', () => {
     expect(bubbleHandler).not.toHaveBeenCalled();
   });
 });
+
+// Issue #20: the overlay hides off TWO independent flags — whole-widget
+// visibility (`state:visibility-changed`) and annotations-only visibility
+// (`state:annotations-visibility-changed`) — and applies
+// `.wd-overlay--hidden` when EITHER is false. See Overlay's class doc for
+// why this beats collapsing the two into one Widget-owned state.
+describe('Overlay visibility (issue #20)', () => {
+  it('starts visible (no .wd-overlay--hidden) by default', () => {
+    const bus = new EventBus();
+    const overlay = new Overlay({ bus });
+    expect(overlay.el.classList.contains('wd-overlay--hidden')).toBe(false);
+  });
+
+  it('state:visibility-changed with visible:false hides the overlay', () => {
+    const bus = new EventBus();
+    const overlay = new Overlay({ bus });
+
+    bus.emit('state:visibility-changed', { visible: false });
+
+    expect(overlay.el.classList.contains('wd-overlay--hidden')).toBe(true);
+  });
+
+  it('state:annotations-visibility-changed with visible:false hides the overlay independently', () => {
+    const bus = new EventBus();
+    const overlay = new Overlay({ bus });
+
+    bus.emit('state:annotations-visibility-changed', { visible: false });
+
+    expect(overlay.el.classList.contains('wd-overlay--hidden')).toBe(true);
+  });
+
+  it('re-showing ONE flag does not reveal the overlay while the other is still false', () => {
+    const bus = new EventBus();
+    const overlay = new Overlay({ bus });
+
+    bus.emit('state:visibility-changed', { visible: false });
+    bus.emit('state:annotations-visibility-changed', { visible: false });
+    expect(overlay.el.classList.contains('wd-overlay--hidden')).toBe(true);
+
+    bus.emit('state:visibility-changed', { visible: true });
+    expect(overlay.el.classList.contains('wd-overlay--hidden')).toBe(true); // annotations still hidden
+
+    bus.emit('state:annotations-visibility-changed', { visible: true });
+    expect(overlay.el.classList.contains('wd-overlay--hidden')).toBe(false); // both visible now
+  });
+
+  it('dispose() unsubscribes — a later state event no longer toggles the (removed) element', () => {
+    const bus = new EventBus();
+    const overlay = new Overlay({ bus });
+
+    overlay.dispose();
+    bus.emit('state:visibility-changed', { visible: false });
+    bus.emit('state:annotations-visibility-changed', { visible: false });
+
+    expect(overlay.el.classList.contains('wd-overlay--hidden')).toBe(false);
+  });
+});

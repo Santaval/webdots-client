@@ -64,9 +64,28 @@ export interface WebdotsEvents {
   /** "Resend" from the expired-code surface — Widget re-requests a link for the last email. */
   'intent:resend-magic-link': undefined;
 
+  /**
+   * Issue #20: the toolbar's "Hide/Show annotations" button wants the
+   * annotation-visibility flag flipped. Distinct from `intent:toggle-mode` —
+   * this only ever affects pins/overlay/popovers, never the toolbar itself
+   * (see Widget's `setAnnotationsVisible`). `undefined`, matching every
+   * intent in this file but the legacy `intent:toggle-mode`.
+   */
+  'intent:toggle-annotations': undefined;
+
   // ---- state (Widget/Store -> UI) -------------------------------------
   'state:mode-changed': { mode: WidgetMode };
   'state:visibility-changed': { visible: boolean };
+  /**
+   * Issue #20: fires whenever `Widget.setAnnotationsVisible()` changes the
+   * annotation-visibility flag — a DISTINCT concept from
+   * `state:visibility-changed` (whole-widget show/hide). Overlay applies
+   * `.wd-overlay--hidden` off BOTH flags independently (see Overlay's class
+   * doc); Toolbar reacts to update its toggle button's label/aria-pressed
+   * and the unplaced tray. Public — see `PublicEventName` below — so an
+   * embedder can observe the reviewer hiding/showing annotations.
+   */
+  'state:annotations-visibility-changed': { visible: boolean };
   'state:annotations-changed': {
     added: Annotation[];
     updated: Annotation[];
@@ -126,6 +145,6 @@ export interface WebdotsEvents {
 export type AuthPhase = 'idle' | 'email' | 'requesting' | 'code-sent' | 'verifying' | 'verified';
 
 /** Event names available to library consumers via `handle.on()`. */
-export type PublicEventName = 'state:mode-changed' | 'state:visibility-changed';
+export type PublicEventName = 'state:mode-changed' | 'state:visibility-changed' | 'state:annotations-visibility-changed';
 
 export type PublicEvents = Pick<WebdotsEvents, PublicEventName>;

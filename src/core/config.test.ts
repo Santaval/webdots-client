@@ -19,6 +19,7 @@ describe('resolveConfig', () => {
     expect(resolved.testIdAttributes).toEqual(['data-testid', 'data-test', 'data-qa', 'data-cy']);
     expect(resolved.requestTimeoutMs).toBe(10000);
     expect(resolved.debug).toBe(false);
+    expect(resolved.hideAnnotations).toBe(false);
     // Default resolver: current location's origin + pathname (query/hash dropped).
     expect(resolved.pageKey).toBe(`${location.origin}${location.pathname}`);
   });
@@ -73,6 +74,7 @@ describe('resolveConfig', () => {
       debug: true,
       requestTimeoutMs: 5000,
       testIdAttributes: ['data-qa-id'],
+      hideAnnotations: true,
     });
 
     expect(resolved.autoLoad).toBe(false);
@@ -83,6 +85,7 @@ describe('resolveConfig', () => {
     expect(resolved.debug).toBe(true);
     expect(resolved.requestTimeoutMs).toBe(5000);
     expect(resolved.testIdAttributes).toEqual(['data-qa-id']);
+    expect(resolved.hideAnnotations).toBe(true);
   });
 
   it('carries user attribution through', () => {
