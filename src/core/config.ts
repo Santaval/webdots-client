@@ -1,7 +1,8 @@
-import type { Annotation, ScreenshotContext, WidgetMode } from './types';
+import type { Annotation, ScreenshotContext, ToolbarCorner, WidgetMode } from './types';
 import type { AnnotationAPI } from '../api/AnnotationAPI';
 import type { AuthAPI } from '../api/AuthAPI';
 import { resolvePageKey, assertValidPageKey, type PageKeyResolver } from '../utils/pageKey';
+import { isToolbarCorner } from '../utils/toolbarPosition';
 
 /**
  * Public configuration surface. `api`/`authApi` are DI escape hatches: supply
@@ -30,6 +31,15 @@ export interface WebdotsConfig {
    * wins over this on every subsequent load. Default `false`.
    */
   hideAnnotations?: boolean;
+  /**
+   * Issue #21: the corner the floating toolbar starts in. This is only the
+   * INITIAL placement — a stored per-`apiUrl` preference (set by the
+   * reviewer dragging the toolbar, or `handle.setToolbarPosition()`) wins
+   * over this on every subsequent load. Only corners are expressible here;
+   * a free `{ x, y }` point comes from a drag or the handle method.
+   * Default `'bottom-right'` (the historical spot).
+   */
+  toolbarPosition?: ToolbarCorner;
   container?: HTMLElement;
   zIndex?: number;
   theme?: 'light' | 'dark' | 'auto';
@@ -74,6 +84,7 @@ export interface ResolvedWebdotsConfig {
   autoLoad: boolean;
   showResolved: boolean;
   hideAnnotations: boolean;
+  toolbarPosition: ToolbarCorner;
   container: HTMLElement;
   zIndex: number;
   theme: 'light' | 'dark' | 'auto';
@@ -135,6 +146,14 @@ export function resolveConfig(raw: WebdotsConfig): ResolvedWebdotsConfig {
     throw new Error('[webdots] config.theme must be one of "light" | "dark" | "auto".');
   }
 
+  // Issue #21: same fail-loud shape as the theme check above — the guard
+  // itself lives in utils/toolbarPosition.ts so viewPrefs shares it.
+  if (raw.toolbarPosition !== undefined && !isToolbarCorner(raw.toolbarPosition)) {
+    throw new Error(
+      '[webdots] config.toolbarPosition must be one of "top-left" | "top-right" | "bottom-left" | "bottom-right".',
+    );
+  }
+
   if (
     raw.requestTimeoutMs !== undefined &&
     (typeof raw.requestTimeoutMs !== 'number' || raw.requestTimeoutMs <= 0)
@@ -168,6 +187,7 @@ export function resolveConfig(raw: WebdotsConfig): ResolvedWebdotsConfig {
     autoLoad: raw.autoLoad ?? true,
     showResolved: raw.showResolved ?? false,
     hideAnnotations: raw.hideAnnotations ?? false,
+    toolbarPosition: raw.toolbarPosition ?? 'bottom-right',
     container: raw.container ?? document.body,
     zIndex: raw.zIndex ?? DEFAULT_Z_INDEX,
     theme: raw.theme ?? 'auto',
